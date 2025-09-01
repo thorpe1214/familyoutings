@@ -28,7 +28,7 @@ export function eventToICS({ title, startISO, endISO, description, location, url
       ? { name: organizerName, email: "no-reply@familyoutings.local" }
       : undefined,
     productId: "familyoutings.app",
-    calName: "FamilyOutings — Portland",
+    calName: "FamilyOutings",
   });
 
   if (error) {

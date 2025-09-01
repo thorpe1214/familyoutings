@@ -4,7 +4,7 @@ export default function AboutPage() {
   const first = Array.isArray(events) && events.length > 0 ? events[0] : null;
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4">About FamilyOutings — Portland</h1>
+      <h1 className="text-2xl font-bold mb-4">About FamilyOutings</h1>
       <div className="space-y-3 text-gray-700">
         <p>
           FamilyOutings lists kid‑welcome events only — surfaced from organizer info and community tips.
@@ -16,7 +16,7 @@ export default function AboutPage() {
           Add‑to‑Calendar is built‑in for quick planning.
         </p>
         <p>
-          This is a Portland pilot — more cities later.
+          This started as a Portland pilot — expanding nationwide soon.
         </p>
       </div>
       {first && (

@@ -3,11 +3,11 @@ import dayjs from "dayjs";
 import type { EventItem } from "@/lib/types";
 
 type PageProps = {
-  params: { id: string };
+  params: { slug: string };
 };
 
-export default async function EventDetails({ params }: PageProps) {
-  const res = await fetch(`/api/events/${encodeURIComponent(params.id)}`, { cache: "no-store" });
+export default async function EventDetailsBySlug({ params }: PageProps) {
+  const res = await fetch(`/api/events/slug/${encodeURIComponent(params.slug)}`, { cache: "no-store" });
   if (res.status === 404) {
     return (
       <div className="max-w-2xl mx-auto p-6 flex flex-col gap-5">
@@ -122,3 +122,4 @@ function Badge({ children, variant }: { children: React.ReactNode; variant?: "fr
       : " bg-gray-100 text-gray-700";
   return <span className={`${base}${styles}`}>{children}</span>;
 }
+

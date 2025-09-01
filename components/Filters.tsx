@@ -32,9 +32,9 @@ export default function Filters() {
   const effectiveRange = range || defaultRange;
 
   return (
-    <section className="w-full flex flex-wrap items-center gap-3 p-3 border rounded-lg bg-white/50 dark:bg-white/5">
+    <section className="w-full flex flex-wrap items-center gap-3 bg-white shadow-sm rounded-lg p-3 mb-4">
       <div className="flex items-center gap-2 w-full">
-        <span className="text-sm text-gray-700 dark:text-gray-200 font-medium">Date:</span>
+        <span className="text-sm text-gray-700 font-medium">Date:</span>
         <Chip label="Today" active={effectiveRange === "today"} onClick={() => setParam("range", "today")} />
         <Chip label="This Weekend" active={effectiveRange === "weekend"} onClick={() => setParam("range", "weekend")} />
         <Chip label="Next 7 Days" active={effectiveRange === "7d"} onClick={() => setParam("range", "7d")} />
@@ -89,9 +89,9 @@ function LabeledSelect({
 }) {
   return (
     <label className="text-sm flex items-center gap-2">
-      <span className="text-gray-700 dark:text-gray-200 font-medium">{label}</span>
+      <span className="text-gray-700 font-medium">{label}</span>
       <select
-        className="border rounded px-2 py-1 bg-white dark:bg-transparent"
+        className="border rounded px-2 py-1 bg-white"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -119,8 +119,10 @@ function Chip({
       type="button"
       onClick={onClick}
       className={
-        "inline-flex items-center rounded border px-3 py-1.5 text-sm transition-colors " +
-        (active ? "border-gray-400 bg-gray-100 text-gray-900" : "border-gray-300 hover:bg-gray-50 text-gray-800")
+        "inline-flex items-center rounded-full px-3 py-1 text-sm transition-colors " +
+        (active
+          ? "bg-[#14b8a6] text-white"
+          : "bg-gray-100 text-gray-700")
       }
     >
       {label}
