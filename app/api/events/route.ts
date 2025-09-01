@@ -45,66 +45,90 @@ export async function GET(request: Request) {
     const startISOParam = searchParams.get("startISO");
     const endISOParam = searchParams.get("endISO");
 
-    const lat = latParam != null ? parseFloat(latParam) : undefined;
-    const lon = lonParam != null ? parseFloat(lonParam) : undefined;
-    const radiusMiles = radiusParam != null ? parseFloat(radiusParam) : 10;
+    const defaultLat = Number(process.env.PORTLAND_LAT ?? 45.5231);
+    const defaultLon = Number(process.env.PORTLAND_LON ?? -122.6765);
+    const fallbackLat = Number.isFinite(defaultLat) ? defaultLat : 45.5231;
+    const fallbackLon = Number.isFinite(defaultLon) ? defaultLon : -122.6765;
+
+    let lat: number;
+    let lon: number;
+    if (!latParam || !lonParam) {
+      lat = fallbackLat;
+      lon = fallbackLon;
+    } else {
+      const latNum = Number(latParam);
+      const lonNum = Number(lonParam);
+      if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
+        return NextResponse.json(
+          { error: "Invalid coordinates: 'lat' and 'lon' must be numeric." },
+          { status: 400 }
+        );
+      }
+      lat = latNum;
+      lon = lonNum;
+    }
+
+    let radiusMiles: number;
+    if (!radiusParam || radiusParam.length === 0) {
+      radiusMiles = 10;
+    } else {
+      const r = Number(radiusParam);
+      if (!Number.isFinite(r) || r <= 0) {
+        return NextResponse.json(
+          { error: "Invalid 'radiusMiles': must be a positive number." },
+          { status: 400 }
+        );
+      }
+      radiusMiles = r;
+    }
 
     const now = dayjs();
-    const startISO = startISOParam ?? now.toISOString();
-    const endISO = endISOParam ?? now.add(14, "day").toISOString();
+    let startISO: string;
+    let endISO: string;
+    if (startISOParam) {
+      if (!dayjs(startISOParam).isValid()) {
+        return NextResponse.json(
+          { error: "Invalid 'startISO': must be an ISO-8601 date string." },
+          { status: 400 }
+        );
+      }
+      startISO = startISOParam;
+    } else {
+      startISO = now.toISOString();
+    }
+    if (endISOParam) {
+      if (!dayjs(endISOParam).isValid()) {
+        return NextResponse.json(
+          { error: "Invalid 'endISO': must be an ISO-8601 date string." },
+          { status: 400 }
+        );
+      }
+      endISO = endISOParam;
+    } else {
+      endISO = now.add(14, "day").toISOString();
+    }
+
+    if (dayjs(endISO).isBefore(dayjs(startISO))) {
+      return NextResponse.json(
+        { error: "'endISO' must be on or after 'startISO'." },
+        { status: 400 }
+      );
+    }
 
     let rows: any[] = [];
 
-    if (Number.isFinite(lat as number) && Number.isFinite(lon as number)) {
-      const { data, error } = await supabaseAnon.rpc("events_within", {
-        lat,
-        lon,
-        radius_m: milesToMeters(radiusMiles),
-        startISO,
-        endISO,
-        tag: null,
-        min_age: null,
-        max_age: null,
-      });
-      if (error) throw error;
-      rows = data ?? [];
-    } else {
-      const { data, error } = await supabaseAnon
-        .from("events")
-        .select(
-          [
-            "id",
-            "slug",
-            "source",
-            "source_id",
-            "title",
-            "start_utc",
-            "end_utc",
-            "venue_name",
-            "address",
-            "city",
-            "state",
-            "lat",
-            "lon",
-            "is_free",
-            "price_min",
-            "price_max",
-            "currency",
-            "age_band",
-            "indoor_outdoor",
-            "family_claim",
-            "parent_verified",
-            "source_url",
-            "image_url",
-            "tags",
-          ].join(",")
-        )
-        .gte("start_utc", startISO)
-        .lte("start_utc", endISO)
-        .order("start_utc", { ascending: true });
-      if (error) throw error;
-      rows = data ?? [];
-    }
+    const { data, error } = await supabaseAnon.rpc("events_within", {
+      lat,
+      lon,
+      radius_m: milesToMeters(radiusMiles),
+      startISO,
+      endISO,
+      tag: null,
+      min_age: null,
+      max_age: null,
+    });
+    if (error) throw error;
+    rows = data ?? [];
 
     const compact = rows.map(mapRowToCompact);
     return NextResponse.json(compact, { headers: { "Cache-Control": "no-store" } });

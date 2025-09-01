@@ -2,6 +2,7 @@ import Filters from "@/components/Filters";
 import EventCard from "@/components/EventCard";
 import type { EventItem } from "@/lib/types";
 import dayjs from "dayjs";
+import { lookupZip } from "@/lib/geo/zip";
 
 type PageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
@@ -12,6 +13,8 @@ export default async function Home({ searchParams }: PageProps) {
   const age = (searchParams?.age as string) || "";
   const io = (searchParams?.io as string) || "";
   const rangeParam = (searchParams?.range as string) || ""; // today | weekend | 7d | all | ""
+  const zipParam = (searchParams?.zip as string) || "97227";
+  const radiusParam = (searchParams?.radius as string) || "10"; // miles
 
   const now = dayjs();
   const dow = now.day(); // 0=Sun, 4=Thu
@@ -39,7 +42,15 @@ export default async function Home({ searchParams }: PageProps) {
     rangeEnd = null;
   }
 
+  const zipInfo = lookupZip(zipParam);
+  const headerLocation = zipInfo ? `${zipInfo.city}, ${zipInfo.state}` : null;
+
   const params = new URLSearchParams();
+  if (zipInfo) {
+    params.set("lat", String(zipInfo.lat));
+    params.set("lon", String(zipInfo.lon));
+    params.set("radiusMiles", String(Number(radiusParam) || 10));
+  }
   if (rangeStart && rangeEnd) {
     params.set("startISO", rangeStart.toISOString());
     params.set("endISO", rangeEnd.toISOString());
@@ -47,15 +58,19 @@ export default async function Home({ searchParams }: PageProps) {
 
   let errorMsg: string | null = null;
   let apiItems: any[] = [];
-  try {
-    const res = await fetch(`/api/events?${params.toString()}`, { cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(`Events API error ${res.status}`);
+  if (!zipInfo) {
+    errorMsg = "ZIP not found";
+  } else {
+    try {
+      const res = await fetch(`/api/events?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`Events API error ${res.status}`);
+      }
+      const json = await res.json();
+      apiItems = Array.isArray(json) ? json : [];
+    } catch (err) {
+      errorMsg = "Failed to load events. Please try again later.";
     }
-    const json = await res.json();
-    apiItems = Array.isArray(json) ? json : [];
-  } catch (err) {
-    errorMsg = "Failed to load events. Please try again later.";
   }
 
   const events = (apiItems as any[])
@@ -100,6 +115,9 @@ export default async function Home({ searchParams }: PageProps) {
 
   return (
     <div className="max-w-2xl mx-auto p-6 flex flex-col gap-5">
+      {headerLocation && (
+        <h1 className="text-lg font-semibold text-gray-900">FamilyOutings — {headerLocation}</h1>
+      )}
       <Filters />
       <main className="flex flex-col">
         {errorMsg && (
@@ -110,8 +128,12 @@ export default async function Home({ searchParams }: PageProps) {
         {events.map(({ event, slug }) => (
           <EventCard key={event.id} event={event} slug={slug} />
         ))}
-        {events.length === 0 && (
-          <p className="text-sm text-gray-600">No events match your filters.</p>
+        {events.length === 0 && !errorMsg && (
+          <p className="text-sm text-gray-600">
+            {headerLocation
+              ? `No events found for ${headerLocation} in this range. Try expanding the radius or date.`
+              : "No events match your filters."}
+          </p>
         )}
       </main>
       <footer className="text-sm text-gray-600 border-t pt-4">

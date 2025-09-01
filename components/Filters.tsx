@@ -23,6 +23,8 @@ export default function Filters() {
   const age = searchParams.get("age") || ""; // "All Ages" | "0–5" | "6–12" | "Teens" | ""
   const io = searchParams.get("io") || ""; // "Indoor" | "Outdoor" | ""
   const range = searchParams.get("range") || ""; // "today" | "weekend" | "7d" | "all"
+  const zip = searchParams.get("zip") || ""; // 5-digit ZIP
+  const radius = searchParams.get("radius") || "10"; // miles
 
   const defaultRange = useMemo(() => {
     const d = dayjs();
@@ -40,6 +42,38 @@ export default function Filters() {
         <Chip label="Next 7 Days" active={effectiveRange === "7d"} onClick={() => setParam("range", "7d")} />
         <Chip label="All" active={effectiveRange === "all"} onClick={() => setParam("range", "all")} />
       </div>
+      <label className="text-sm flex items-center gap-2">
+        <span className="text-gray-700 font-medium">ZIP</span>
+        <input
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={5}
+          placeholder="ZIP code"
+          className="border rounded px-2 py-1 bg-white w-24"
+          defaultValue={zip}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/\D+/g, "").slice(0, 5);
+            e.target.value = digits;
+            if (digits.length === 5) setParam("zip", digits);
+            if (digits.length === 0) setParam("zip", null);
+          }}
+          onBlur={(e) => {
+            const digits = e.target.value.replace(/\D+/g, "").slice(0, 5);
+            if (digits.length === 5) setParam("zip", digits);
+            else if (digits.length === 0) setParam("zip", null);
+          }}
+        />
+      </label>
+      <LabeledSelect
+        label="Radius"
+        value={radius}
+        onChange={(v) => setParam("radius", v || null)}
+        options={[
+          { label: "5 mi", value: "5" },
+          { label: "10 mi", value: "10" },
+          { label: "20 mi", value: "20" },
+        ]}
+      />
       <LabeledSelect
         label="Free/Paid"
         value={free}
