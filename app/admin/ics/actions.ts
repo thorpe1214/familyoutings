@@ -95,3 +95,13 @@ export async function runAllActiveFeeds() {
   revalidatePath("/admin/ics");
   return { ok: true, message: "Batch ingest started" } as const;
 }
+
+/** Activate or deactivate a feed */
+export async function setFeedActive(feedId: string, active: boolean) {
+  if (!feedId) return { ok: false, message: "Missing feedId" } as const;
+  const sb = supabaseService();
+  const { error } = await sb.from("ics_feeds").update({ active }).eq("id", feedId);
+  if (error) return { ok: false, message: error.message } as const;
+  revalidatePath("/admin/ics");
+  return { ok: true, message: active ? "Feed activated" : "Feed deactivated" } as const;
+}

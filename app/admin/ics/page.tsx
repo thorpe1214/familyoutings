@@ -1,7 +1,7 @@
 // NO "use server" here
 export const dynamic = "force-dynamic";
 
-import { listFeeds, runFeedNow } from "./actions";
+import { listFeeds, runFeedNow, setFeedActive } from "./actions";
 import AddIcsForm from "./AddIcsForm";
 import RunAllButton from "./RunAllButton";
 import BulkAddIcsForm from "./BulkAddIcsForm";
@@ -18,6 +18,7 @@ async function FeedsTable() {
             <th>URL</th>
             <th>City</th>
             <th>State</th>
+            <th>Active</th>
             <th></th>
           </tr>
         </thead>
@@ -28,11 +29,19 @@ async function FeedsTable() {
               <td className="truncate max-w-[22rem]">{f.url}</td>
               <td className="text-center">{f.city ?? ""}</td>
               <td className="text-center">{f.state ?? ""}</td>
+              <td className="text-center">{f.active ? "Yes" : "No"}</td>
               <td className="text-right">
                 {/* Run single feed */}
                 {/* @ts-expect-error async server action wrapper */}
                 <form action={async () => { await runFeedNow(f.id as string); }}>
-                  <button className="border rounded px-3 py-1">Run now</button>
+                  <button className="border rounded px-3 py-1 mr-2">Run now</button>
+                </form>
+                {/* Toggle active */}
+                {/* @ts-expect-error async server action wrapper */}
+                <form action={async () => { await setFeedActive(f.id as string, !f.active); }} className="inline">
+                  <button className="border rounded px-3 py-1">
+                    {f.active ? "Deactivate" : "Activate"}
+                  </button>
                 </form>
               </td>
             </tr>
