@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export function GET() {
   return NextResponse.json({
     ok: true,
-    timestamp: new Date().toISOString(),
+    site: process.env.NEXT_PUBLIC_SITE_URL || null,
+    hasAnon: !!process.env.SUPABASE_ANON_KEY,
+    hasService: !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE),
   });
 }
-

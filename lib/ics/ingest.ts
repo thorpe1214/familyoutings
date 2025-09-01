@@ -1,6 +1,7 @@
 import ical from "ical";
 import dayjs from "dayjs";
 import type { NormalizedEvent } from "@/lib/db/upsert";
+import { detectFamilyHeuristic, detectKidAllowed } from "@/lib/heuristics/family";
 import { supabaseService } from "@/lib/db/supabase";
 
 type IcsEvent = {
@@ -99,7 +100,7 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
     const loc = ev.location || "";
 
     const geo = await geocodeCached(loc);
-    out.push({
+    const item: NormalizedEvent = {
       source: `ics:${host}`,
       source_id: ev.uid || `${title}-${start}`,
       title,
@@ -123,7 +124,12 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
       source_url: url,
       image_url: "",
       tags: ["ics"],
-    });
+    };
+    const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")}`;
+    item.is_family = detectFamilyHeuristic(blob);
+    const kidAllowed = detectKidAllowed(blob);
+    if (kidAllowed !== null) item.kid_allowed = kidAllowed;
+    out.push(item);
   }
   return out;
 }

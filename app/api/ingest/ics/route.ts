@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { parseICS } from "@/lib/ics/ingest";
 import { upsertEvents } from "@/lib/db/upsert";
 import type { NormalizedEvent } from "@/lib/db/upsert";
+import { detectFamilyHeuristic } from "@/lib/heuristics/family";
 
 // Simple in-memory rate limiter: 10 requests/min per IP
 type Bucket = { count: number; resetAt: number };
@@ -77,6 +78,10 @@ export async function GET(req: Request) {
         const u = unique[i];
         try {
           const items = await parseICS(u);
+          for (const it of items) {
+            const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
+            it.is_family = detectFamilyHeuristic(blob);
+          }
           collected.push(...items);
         } catch (e: any) {
           errors.push({ url: u, error: String(e?.message || e) });
@@ -91,6 +96,47 @@ export async function GET(req: Request) {
       { urls: unique.length, parsed: collected.length, inserted, errors },
       { headers: { "Cache-Control": "no-store" } }
     );
+  } catch (e: any) {
+    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request) {
+  // Rate limit
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(ip);
+  if (!rl.ok) {
+    return new NextResponse(JSON.stringify({ error: "Rate limit exceeded" }), {
+      status: 429,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": String(rl.retryAfter ?? 60),
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+  try {
+    const body = await req.json().catch(() => ({} as any));
+    const url: string | undefined = body?.url;
+    const city: string | undefined = body?.city || undefined;
+    const state: string | undefined = body?.state || undefined;
+    if (!url || typeof url !== "string") {
+      return NextResponse.json({ error: "url required" }, { status: 400 });
+    }
+    const items = await parseICS(url);
+    // Optionally override city/state if provided
+    if (city || state) {
+      for (const it of items) {
+        if (city) (it as any).city = city;
+        if (state) (it as any).state = state;
+      }
+    }
+    for (const it of items) {
+      const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
+      it.is_family = detectFamilyHeuristic(blob);
+    }
+    const inserted = await upsertEvents(items as NormalizedEvent[]);
+    return NextResponse.json({ urls: 1, parsed: items.length, inserted, errors: [] }, { headers: { "Cache-Control": "no-store" } });
   } catch (e: any) {
     return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
   }

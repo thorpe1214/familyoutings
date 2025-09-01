@@ -1,0 +1,13 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//FamilyOutings//Sample//EN
+BEGIN:VEVENT
+UID:sample-1@familyoutings
+DTSTAMP:20250901T120000Z
+DTSTART:20250902T180000Z
+DTEND:20250902T190000Z
+SUMMARY:Storytime at Sample Library (All Ages)
+DESCRIPTION:Bring your kids for stories and songs.
+LOCATION:Sample Library, Main Room
+END:VEVENT
+END:VCALENDAR

@@ -1,5 +1,8 @@
 import dayjs from "dayjs";
 import type { NormalizedEvent } from "@/lib/db/upsert";
+import { detectFamilyHeuristic } from "@/lib/heuristics/family";
+const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
+const FAMILY_RE = /(\b(kids?|family|toddler|children|all\s*ages|story\s*time|library|parent|sensory|puppet|zoo|aquarium|park|craft|lego|museum|family[-\s]?friendly)\b)/i;
 
 type Args = {
   lat: number;
@@ -70,7 +73,11 @@ export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEve
         ? `${addressLine}, ${city} ${state} ${postal}`.trim()
         : addressLine;
 
-      return {
+      const seg = Array.isArray(ev?.classifications)
+        ? ev.classifications[0]?.segment?.name
+        : undefined;
+
+      const item: NormalizedEvent = {
         source: "ticketmaster",
         source_id: ev?.id ?? `${name}-${start}`,
         title: name,
@@ -93,11 +100,14 @@ export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEve
         parent_verified: false,
         source_url: ev?.url ?? "",
         image_url: ev?.images?.[0]?.url ?? "",
-        tags: ["ticketmaster"],
+        tags: seg ? [seg] : ["ticketmaster"],
       } as NormalizedEvent;
+      const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")}`.toLowerCase();
+      item.is_family = detectFamilyHeuristic(blob);
+      item.kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : true;
+      return item;
     })
     .filter((e) => !!e.start_utc);
 
   return out;
 }
-

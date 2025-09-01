@@ -11,6 +11,8 @@ export default function EventCard({ event, slug }: Props) {
   const start = dayjs(event.start);
   const end = dayjs(event.end);
   const dateStr = `${start.format("ddd, MMM D")} · ${start.format("h:mm A")}–${end.format("h:mm A")}`;
+  const adultMatch = /\b(21\+|18\+)\b/.exec(event.title || "");
+  const ageBadge = adultMatch ? adultMatch[1] : event.kidAllowed ? "All Ages" : undefined;
 
   return (
     <article className="bg-white rounded-xl shadow-sm p-4 mb-4 flex flex-col gap-2">
@@ -25,7 +27,8 @@ export default function EventCard({ event, slug }: Props) {
         <Badge variant={event.isFree ? "free" : "paid"}>
           {event.isFree ? "Free" : `Paid${event.priceMin ? ` $${event.priceMin}` : ""}`}
         </Badge>
-        <Badge>{`Ages: ${event.age}`}</Badge>
+        {ageBadge && <Badge>{ageBadge}</Badge>}
+        {!ageBadge && <Badge>{`Ages: ${event.age}`}</Badge>}
         <Badge>{event.indoorOutdoor}</Badge>
         {event.parentVerified && <Badge variant="parent">⭐ Parent-Verified</Badge>}
       </div>

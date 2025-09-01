@@ -25,6 +25,7 @@ export interface EventItem {
   source: SourceInfo;
   description: string;
   tags: string[];
+  kidAllowed?: boolean;
 }
 
 export interface ICSInput {

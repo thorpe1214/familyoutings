@@ -1,18 +1,20 @@
 import Filters from "@/components/Filters";
-import EventCard from "@/components/EventCard";
-import type { EventItem } from "@/lib/types";
 import dayjs from "dayjs";
 import { lookupZip } from "@/lib/geo/zip";
+import EventsFeedClient from "@/components/EventsFeedClient";
+import { revalidatePath } from "next/cache";
+import React from "react";
+import RefreshIngestButton from "@/components/RefreshIngestButton";
 
 type PageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
 export default async function Home({ searchParams }: PageProps) {
+  const rangeParam = (searchParams?.range as string) || ""; // today | weekend | 7d | all | ""
   const free = (searchParams?.free as string) || ""; // "free" | "paid" | ""
   const age = (searchParams?.age as string) || "";
   const io = (searchParams?.io as string) || "";
-  const rangeParam = (searchParams?.range as string) || ""; // today | weekend | 7d | all | ""
   const zipParam = (searchParams?.zip as string) || "97227";
   const radiusParam = (searchParams?.radius as string) || "10"; // miles
 
@@ -45,100 +47,102 @@ export default async function Home({ searchParams }: PageProps) {
   const zipInfo = lookupZip(zipParam);
   const headerLocation = zipInfo ? `${zipInfo.city}, ${zipInfo.state}` : null;
 
-  const params = new URLSearchParams();
+  // Optional: pre-check for empty state by calling /api/events for the first page
+  let emptyState: { isEmpty: boolean } = { isEmpty: false };
   if (zipInfo) {
-    params.set("lat", String(zipInfo.lat));
-    params.set("lon", String(zipInfo.lon));
-    params.set("radiusMiles", String(Number(radiusParam) || 10));
-  }
-  if (rangeStart && rangeEnd) {
-    params.set("startISO", rangeStart.toISOString());
-    params.set("endISO", rangeEnd.toISOString());
-  }
-
-  let errorMsg: string | null = null;
-  let apiItems: any[] = [];
-  if (!zipInfo) {
-    errorMsg = "ZIP not found";
-  } else {
     try {
-      const res = await fetch(`/api/events?${params.toString()}`, { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`Events API error ${res.status}`);
+      const origin = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+      const qs = new URLSearchParams();
+      qs.set("lat", String(zipInfo.lat));
+      qs.set("lon", String(zipInfo.lon));
+      qs.set("radiusMiles", String(Number(radiusParam) || 10));
+      if (rangeStart) qs.set("startISO", rangeStart.toISOString());
+      if (rangeEnd) qs.set("endISO", rangeEnd.toISOString());
+      if (free) qs.set("free", free);
+      if (age) qs.set("age", age);
+      if (io) qs.set("io", io);
+      qs.set("limit", "1");
+      const res = await fetch(`${origin}/api/events?${qs.toString()}`, { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        emptyState.isEmpty = Array.isArray(json?.items) && json.items.length === 0;
       }
-      const json = await res.json();
-      apiItems = Array.isArray(json) ? json : [];
-    } catch (err) {
-      errorMsg = "Failed to load events. Please try again later.";
-    }
+    } catch {}
   }
 
-  const events = (apiItems as any[])
-    .map((i) => {
-      const rawAge = (i.age as string) || "All Ages";
-      const normAge = rawAge === "0-5" ? "0–5" : rawAge === "13-17" ? "Teens" : (rawAge as string);
-      const event: EventItem = {
-        id: i.id as string,
-        title: i.title as string,
-        start: i.start as string,
-        end: i.end as string,
-        venue: i.venue as string,
-        address: i.address as string,
-        lat: i.lat as number | undefined,
-        lon: i.lon as number | undefined,
-        isFree: Boolean(i.isFree),
-        priceMin: (i.priceMin as number) ?? 0,
-        priceMax: (i.priceMax as number) ?? 0,
-        age: (normAge as EventItem["age"]) ?? "All Ages",
-        indoorOutdoor: (i.indoorOutdoor as EventItem["indoorOutdoor"]) ?? "Indoor",
-        familyClaim: i.familyClaim as string,
-        parentVerified: Boolean(i.parentVerified),
-        source: { name: "", url: (i.sourceUrl as string) || "" },
-        description: "",
-        tags: (i.tags as string[]) ?? [],
-      };
-      return { event, slug: (i.slug as string) || null };
-    })
-    .filter(({ event }: { event: EventItem }) => {
-      if (free === "free" && !event.isFree) return false;
-      if (free === "paid" && event.isFree) return false;
-      if (age && event.age !== age) return false;
-      if (io && event.indoorOutdoor !== io) return false;
-      if (rangeStart && rangeEnd) {
-        const s = dayjs(event.start);
-        const en = dayjs(event.end);
-        const outside = en.isBefore(rangeStart) || s.isAfter(rangeEnd);
-        if (outside) return false;
-      }
-      return true;
+  async function refreshEvents(formData: FormData) {
+    "use server";
+    const zip = (formData.get("zip") as string) || zipParam || "";
+    const radius = Number((formData.get("radius") as string) || "25");
+    const days = Number((formData.get("days") as string) || "14");
+    const origin = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+    const res = await fetch(`${origin}/api/ingest/all`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postalCode: zip, radius, days }),
+      cache: "no-store",
     });
+    const json = await res.json().catch(() => ({ ok: false, error: "Invalid JSON" }));
+    // Revalidate home page cache after ingest
+    revalidatePath("/");
+    if (!res.ok || json?.ok === false) {
+      return { ok: false, message: json?.error || `Error ${res.status}` };
+    }
+    const total = typeof json?.total === "number" ? json.total : 0;
+    return { ok: true, message: `Done! Found ${total} updates.` };
+  }
 
   return (
     <div className="max-w-2xl mx-auto p-6 flex flex-col gap-5">
       {headerLocation && (
         <h1 className="text-lg font-semibold text-gray-900">FamilyOutings — {headerLocation}</h1>
       )}
-      <Filters />
-      <main className="flex flex-col">
-        {errorMsg && (
-          <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
-            {errorMsg}
-          </p>
-        )}
-        {events.map(({ event, slug }) => (
-          <EventCard key={event.id} event={event} slug={slug} />
-        ))}
-        {events.length === 0 && !errorMsg && (
-          <p className="text-sm text-gray-600">
-            {headerLocation
-              ? `No events found for ${headerLocation} in this range. Try expanding the radius or date.`
-              : "No events match your filters."}
-          </p>
-        )}
-      </main>
+      <div className="relative">
+        <Filters />
+        {/* Inline refresh form near ZIP/radius controls */}
+        <div className="absolute right-3 top-3">
+          <RefreshIngestButton
+            action={refreshEvents}
+            zip={zipParam}
+            radius={radiusParam || "25"}
+            days="14"
+          />
+        </div>
+      </div>
+      {zipInfo ? (
+        emptyState.isEmpty ? (
+          <div className="mt-4 rounded border border-gray-200 bg-white p-4">
+            <h2 className="text-base font-semibold text-gray-900">No family-friendly events found.</h2>
+            <p className="text-sm text-gray-600 mt-1">Try widening your radius or refreshing for your ZIP.</p>
+            <div className="mt-3">
+              <RefreshIngestButton
+                action={refreshEvents}
+                zip={zipParam}
+                radius={radiusParam || "25"}
+                days="14"
+              />
+            </div>
+          </div>
+        ) : (
+          <EventsFeedClient
+            lat={zipInfo.lat}
+            lon={zipInfo.lon}
+            radiusMiles={Number(radiusParam) || 10}
+            startISO={rangeStart ? rangeStart.toISOString() : null}
+            endISO={rangeEnd ? rangeEnd.toISOString() : null}
+            free={free as any}
+            age={age}
+            io={io as any}
+          />
+        )
+      ) : (
+        <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">ZIP not found</p>
+      )}
       <footer className="text-sm text-gray-600 border-t pt-4">
         Family-friendly status is based on organizer info and community input; not guaranteed. Please use discretion.
       </footer>
     </div>
   );
 }
+
+// client UI moved to components/RefreshIngestButton

@@ -1,139 +1,136 @@
-import { NextResponse } from "next/server";
-import dayjs from "dayjs";
-import { supabaseAnon } from "@/lib/db/supabase";
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 
 export const runtime = "nodejs";
 
-function milesToMeters(mi: number) {
-  return Math.round(mi * 1609.344);
-}
-
-function mapRowToCompact(e: any) {
-  return {
-    id: e.id,
-    slug: e.slug ?? null,
-    title: e.title,
-    start: e.start_utc,
-    end: e.end_utc,
-    venue: e.venue_name,
-    address: e.address,
-    city: e.city,
-    state: e.state,
-    lat: e.lat,
-    lon: e.lon,
-    isFree: e.is_free,
-    priceMin: e.price_min,
-    priceMax: e.price_max,
-    currency: e.currency,
-    age: e.age_band,
-    indoorOutdoor: e.indoor_outdoor,
-    familyClaim: e.family_claim,
-    parentVerified: e.parent_verified,
-    sourceUrl: e.source_url,
-    imageUrl: e.image_url,
-    tags: e.tags ?? [],
-  };
-}
-
-export async function GET(request: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      return NextResponse.json({ error: "Missing Supabase env" }, { status: 500 });
+    }
 
-    const latParam = searchParams.get("lat");
-    const lonParam = searchParams.get("lon");
-    const radiusParam = searchParams.get("radiusMiles");
-    const startISOParam = searchParams.get("startISO");
-    const endISOParam = searchParams.get("endISO");
+    const { searchParams } = new URL(req.url);
+    let limit = Math.min(parseInt(searchParams.get("limit") || "200", 10), 500);
+    let offset = Math.max(parseInt(searchParams.get("offset") || "0", 10), 0);
+    const lat = Number(searchParams.get("lat"));
+    const lon = Number(searchParams.get("lon"));
+    const radiusMiles = Number(searchParams.get("radiusMiles"));
+    const free = (searchParams.get("free") || "").trim(); // "free" | "paid" | ""
+    const age = (searchParams.get("age") || "").trim(); // "All Ages" | "0–5" | "6–12" | "Teens" | ""
+    const io = (searchParams.get("io") || "").trim(); // "Indoor" | "Outdoor" | ""
+    const sort = (searchParams.get("sort") || "start_asc").trim(); // start_asc | start_desc
+    const wantCursor = ((searchParams.get("cursor") || "").trim().toLowerCase() === "true");
+    const cursorStart = searchParams.get("cursorStart") || null; // ISO string
+    const cursorIdRaw = searchParams.get("cursorId");
+    const cursorId = cursorIdRaw ? Number(cursorIdRaw) : null;
+    const startISO = searchParams.get("startISO") || null;
+    const endISO = searchParams.get("endISO") || null;
 
-    const defaultLat = Number(process.env.PORTLAND_LAT ?? 45.5231);
-    const defaultLon = Number(process.env.PORTLAND_LON ?? -122.6765);
-    const fallbackLat = Number.isFinite(defaultLat) ? defaultLat : 45.5231;
-    const fallbackLon = Number.isFinite(defaultLon) ? defaultLon : -122.6765;
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    let lat: number;
-    let lon: number;
-    if (!latParam || !lonParam) {
-      lat = fallbackLat;
-      lon = fallbackLon;
-    } else {
-      const latNum = Number(latParam);
-      const lonNum = Number(lonParam);
-      if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
-        return NextResponse.json(
-          { error: "Invalid coordinates: 'lat' and 'lon' must be numeric." },
-          { status: 400 }
-        );
+    // ALWAYS kid-only: RLS enforces this too, but we also add it in the query.
+    const nowISO = new Date().toISOString();
+    const ascending = sort !== "start_desc";
+    let q = supabase
+      .from("events")
+      .select("*")
+      .eq("kid_allowed", true)
+      .gte("start_utc", startISO || nowISO)
+      .order("start_utc", { ascending })
+      .order("id", { ascending });
+
+    // Validate filters to guard typos
+    const validFree = new Set(["", "free", "paid"]);
+    const validAges = new Set(["All Ages", "0–5", "6–12", "Teens", "0-5", "13-17"]);
+    const validIO = new Set(["", "Indoor", "Outdoor"]);
+    const freeSafe = validFree.has(free) ? free : "";
+    const ageSafe = validAges.has(age) ? (age === "0-5" ? "0–5" : age === "13-17" ? "Teens" : age) : "";
+    const ioSafe = validIO.has(io) ? io : "";
+
+    if (endISO) {
+      // Include events that start on/before endISO
+      q = q.lte("start_utc", endISO);
+    }
+
+    // If lat/lon/radius provided, apply a simple bounding box filter
+    if (Number.isFinite(lat) && Number.isFinite(lon) && Number.isFinite(radiusMiles) && (radiusMiles as number) > 0) {
+      const r = radiusMiles as number;
+      const degLat = r / 69.0; // approx miles per degree latitude
+      const latRad = ((lat as number) * Math.PI) / 180;
+      const milesPerDegLon = Math.max(0.1, 69.172 * Math.cos(latRad));
+      const degLon = r / milesPerDegLon;
+      const minLat = (lat as number) - degLat;
+      const maxLat = (lat as number) + degLat;
+      const minLon = (lon as number) - degLon;
+      const maxLon = (lon as number) + degLon;
+      q = q.gte("lat", minLat).lte("lat", maxLat).gte("lon", minLon).lte("lon", maxLon);
+    }
+
+    // Free/Paid filter
+    if (freeSafe === "free") q = q.eq("is_free", true);
+    else if (freeSafe === "paid") q = q.eq("is_free", false);
+
+    // Age band filter
+    if (ageSafe) q = q.eq("age_band", ageSafe as string);
+
+    // Indoor/Outdoor filter
+    if (ioSafe) q = q.eq("indoor_outdoor", ioSafe as string);
+
+    // Cursor-based pagination: if cursor provided, ignore offset and fetch limit+1
+    let useCursor = Boolean(cursorStart && Number.isFinite(cursorId));
+    if (useCursor) {
+      // (start_utc > cursorStart) OR (start_utc = cursorStart AND id > cursorId)
+      const cs = cursorStart as string;
+      const cid = cursorId as number;
+      const cmp = ascending ? "gt" : "lt";
+      q = q.or(`start_utc.${cmp}.${cs},and(start_utc.eq.${cs},id.gt.${cid})`);
+      offset = 0;
+      // Fetch one extra to compute nextCursor
+      const { data, error } = await q.range(0, limit).then((res: any) => res);
+      if (error) {
+        console.error("events api error:", error);
+        return NextResponse.json({ error: "Query failed" }, { status: 500 });
       }
-      lat = latNum;
-      lon = lonNum;
-    }
-
-    let radiusMiles: number;
-    if (!radiusParam || radiusParam.length === 0) {
-      radiusMiles = 10;
-    } else {
-      const r = Number(radiusParam);
-      if (!Number.isFinite(r) || r <= 0) {
-        return NextResponse.json(
-          { error: "Invalid 'radiusMiles': must be a positive number." },
-          { status: 400 }
-        );
+      let rows = (data as any[]) || [];
+      let nextCursor: { cursorStart: string; cursorId: number } | null = null;
+      if (rows.length > limit) {
+        const last = rows.pop();
+        nextCursor = { cursorStart: last.start_utc, cursorId: last.id };
       }
-      radiusMiles = r;
+      return NextResponse.json({ ok: true, count: rows.length, items: rows, nextCursor });
     }
 
-    const now = dayjs();
-    let startISO: string;
-    let endISO: string;
-    if (startISOParam) {
-      if (!dayjs(startISOParam).isValid()) {
-        return NextResponse.json(
-          { error: "Invalid 'startISO': must be an ISO-8601 date string." },
-          { status: 400 }
-        );
+    if (wantCursor) {
+      // Initial cursor page (no cursor provided): fetch limit+1 and compute nextCursor
+      const { data, error } = await q.range(0, limit).then((res: any) => res);
+      if (error) {
+        console.error("events api error:", error);
+        return NextResponse.json({ error: "Query failed" }, { status: 500 });
       }
-      startISO = startISOParam;
-    } else {
-      startISO = now.toISOString();
-    }
-    if (endISOParam) {
-      if (!dayjs(endISOParam).isValid()) {
-        return NextResponse.json(
-          { error: "Invalid 'endISO': must be an ISO-8601 date string." },
-          { status: 400 }
-        );
+      let rows = (data as any[]) || [];
+      let nextCursor: { cursorStart: string; cursorId: number } | null = null;
+      if (rows.length > limit) {
+        const last = rows.pop();
+        nextCursor = { cursorStart: last.start_utc, cursorId: last.id };
       }
-      endISO = endISOParam;
-    } else {
-      endISO = now.add(14, "day").toISOString();
+      return NextResponse.json({ ok: true, count: rows.length, items: rows, nextCursor });
     }
 
-    if (dayjs(endISO).isBefore(dayjs(startISO))) {
-      return NextResponse.json(
-        { error: "'endISO' must be on or after 'startISO'." },
-        { status: 400 }
-      );
+    // Offset-based pagination
+    q = q.range(offset, offset + limit - 1);
+
+    const { data, error } = await q;
+    if (error) {
+      console.error("events api error:", error);
+      return NextResponse.json({ error: "Query failed" }, { status: 500 });
     }
 
-    let rows: any[] = [];
-
-    const { data, error } = await supabaseAnon.rpc("events_within", {
-      lat,
-      lon,
-      radius_m: milesToMeters(radiusMiles),
-      startISO,
-      endISO,
-      tag: null,
-      min_age: null,
-      max_age: null,
-    });
-    if (error) throw error;
-    rows = data ?? [];
-
-    const compact = rows.map(mapRowToCompact);
-    return NextResponse.json(compact, { headers: { "Cache-Control": "no-store" } });
-  } catch (err: any) {
-    const message = err?.message || "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ ok: true, count: data?.length || 0, items: data || [] });
+  } catch (e: any) {
+    console.error("events api crash:", e);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

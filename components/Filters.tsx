@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dayjs from "dayjs";
 
@@ -33,8 +33,48 @@ export default function Filters() {
   }, []);
   const effectiveRange = range || defaultRange;
 
+  const applied: { key: string; label: string }[] = [];
+  if (free) applied.push({ key: "free", label: free === "free" ? "Free" : "Paid" });
+  if (age) applied.push({ key: "age", label: `Age: ${age}` });
+  if (io) applied.push({ key: "io", label: io });
+  if (radius && radius !== "10") applied.push({ key: "radius", label: `${radius} mi` });
+  if (zip) applied.push({ key: "zip", label: `ZIP ${zip}` });
+
+  const rootRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    let t: any = null;
+    const last = { h: 0 };
+    const set = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h !== last.h) {
+        last.h = h;
+        document.documentElement.style.setProperty("--filters-offset", `${h}px`);
+      }
+    };
+    const schedule = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(set, 120);
+    };
+    set();
+    const RZ = (window as any).ResizeObserver;
+    const ro = RZ ? new RZ(() => schedule()) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", schedule);
+    return () => {
+      if (t) clearTimeout(t);
+      ro?.disconnect?.();
+      window.removeEventListener("resize", schedule);
+    };
+  }, []);
+
   return (
-    <section className="w-full flex flex-wrap items-center gap-3 bg-white shadow-sm rounded-lg p-3 mb-4">
+    <section
+      ref={rootRef as any}
+      className="sticky top-0 z-20 w-full flex flex-col gap-2 backdrop-blur bg-white/80 border-b border-gray-200 p-3 mb-4 relative"
+    >
       <div className="flex items-center gap-2 w-full">
         <span className="text-sm text-gray-700 font-medium">Date:</span>
         <Chip label="Today" active={effectiveRange === "today"} onClick={() => setParam("range", "today")} />
@@ -106,6 +146,33 @@ export default function Filters() {
           { label: "Outdoor", value: "Outdoor" },
         ]}
       />
+      {/* Applied filter chips */}
+      {applied.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {applied.map((a) => (
+            <button
+              key={a.key}
+              type="button"
+              onClick={() => setParam(a.key, null)}
+              className="inline-flex items-center gap-1 text-sm px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 hover:bg-gray-200"
+            >
+              <span>{a.label}</span>
+              <span aria-hidden>×</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              ["free", "age", "io", "radius", "zip"].forEach((k) => setParam(k, null));
+            }}
+            className="ml-1 text-sm text-teal-700 hover:underline"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+      {/* Soft fade/gradient under the sticky bar to soften edge */}
+      <div className="pointer-events-none absolute inset-x-0 -bottom-2 h-3 bg-gradient-to-b from-gray-200/60 to-transparent" />
     </section>
   );
 }

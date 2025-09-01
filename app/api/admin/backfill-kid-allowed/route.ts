@@ -68,23 +68,27 @@ export async function POST(req: NextRequest) {
 
       scanned += rows.length;
 
-      const updates = rows.map((r: any) => {
-        const blob = [
-          r.title,
-          r.description,
-          r.family_claim,
-          r.venue_name,
-          r.city,
-          r.state,
-          r.postal_code,
-          Array.isArray(r.tags) ? r.tags.join(" ") : r.tags,
-          r.source_url,
-        ]
-          .filter(Boolean)
-          .join(" \n ");
-        const kid_allowed = kidAllowedFromText(blob, true);
-        return { id: r.id, kid_allowed };
-      });
+      const updates = rows
+        .map((r: any) => {
+          const blob = [
+            r.title,
+            r.description,
+            r.family_claim,
+            r.venue_name,
+            r.city,
+            r.state,
+            r.postal_code,
+            Array.isArray(r.tags) ? r.tags.join(" ") : r.tags,
+            r.source_url,
+          ]
+            .filter(Boolean)
+            .join(" \n ");
+          // Only set kid_allowed = true where clearly allowed.
+          // Otherwise leave as NULL for future evaluation.
+          const isAllowed = kidAllowedFromText(blob, false);
+          return isAllowed ? { id: r.id, kid_allowed: true } : null;
+        })
+        .filter(Boolean) as Array<{ id: number; kid_allowed: true }>;
 
       if (!dryRun) {
         const { error: uerr } = await supabase.from("events").upsert(updates, { onConflict: "id" });

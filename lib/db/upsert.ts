@@ -27,6 +27,8 @@ export type NormalizedEvent = {
   image_url: string;
   tags: string[];
   slug?: string;
+  is_family?: boolean | null;
+  kid_allowed?: boolean | null;
 };
 
 async function slugExists(slug: string): Promise<boolean> {

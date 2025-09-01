@@ -26,8 +26,9 @@ const NormalizedEventSchema = z.object({
   family_claim: z.string(),
   parent_verified: z.boolean(),
   source_url: z.string().url(),
-  image_url: z.string().url().optional().or(z.literal("")),
+  image_url: z.string(),
   tags: z.array(z.string()),
+  is_family: z.boolean().nullable().optional(),
 });
 
 export async function POST(request: Request) {
@@ -56,4 +57,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
-
