@@ -33,12 +33,12 @@ async function FeedsTable() {
               <td className="text-right">
                 {/* Run single feed */}
                 {/* @ts-expect-error async server action wrapper */}
-                <form action={async () => { await runFeedNow(f.id as string); }}>
+                <form action={runFeedNow.bind(null, f.id as string)}>
                   <button className="border rounded px-3 py-1 mr-2">Run now</button>
                 </form>
                 {/* Toggle active */}
                 {/* @ts-expect-error async server action wrapper */}
-                <form action={async () => { await setFeedActive(f.id as string, !f.active); }} className="inline">
+                <form action={setFeedActive.bind(null, f.id as string, !f.active)} className="inline">
                   <button className="border rounded px-3 py-1">
                     {f.active ? "Deactivate" : "Activate"}
                   </button>

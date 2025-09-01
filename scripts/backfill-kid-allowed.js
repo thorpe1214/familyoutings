@@ -1,6 +1,6 @@
 // Backfill kid_allowed for events where it's NULL, in batches.
 // Usage: node scripts/backfill-kid-allowed.js
-// Requires env: SUPABASE_URL, SUPABASE_SERVICE_ROLE
+// Requires env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -17,9 +17,9 @@ function computeKidAllowed(blob) {
 
 async function main() {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
-    console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE');
+    console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
     process.exit(1);
   }
   const supabase = createClient(url, key);
@@ -58,4 +58,3 @@ main().catch((e) => {
   console.error(e?.message || e);
   process.exit(1);
 });
-
