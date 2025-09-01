@@ -1,4 +1,4 @@
-import { supabaseService } from "./supabase";
+import { supabaseService } from "@/lib/supabaseService";
 import { slugifyEvent } from "@/lib/slug";
 import crypto from "crypto";
 

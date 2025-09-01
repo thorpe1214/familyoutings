@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseService } from "@/lib/supabaseService";
 import { kidAllowedFromText } from "@/lib/kids";
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const ADMIN_TOKEN = process.env.BACKFILL_ADMIN_TOKEN!;
 
 export async function POST(req: NextRequest) {
@@ -21,9 +19,6 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
-    if (!SUPABASE_URL) {
-      return NextResponse.json({ ok: false, error: "Missing SUPABASE_URL. Set it in .env.local." }, { status: 500 });
-    }
 
     const url = new URL(req.url);
     const qpDry = url.searchParams.get("dryRun");
@@ -32,7 +27,7 @@ export async function POST(req: NextRequest) {
     const batchSizeRaw = body?.batchSize;
     const batchSize = Number.isFinite(Number(batchSizeRaw)) ? Number(batchSizeRaw) : 500;
 
-    const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    const supabase = supabaseService();
 
     let scanned = 0;
     let updated = 0;

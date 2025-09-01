@@ -2,7 +2,7 @@ import ical from "ical";
 import dayjs from "dayjs";
 import type { NormalizedEvent } from "@/lib/db/upsert";
 import { detectFamilyHeuristic, detectKidAllowed } from "@/lib/heuristics/family";
-import { supabaseService } from "@/lib/db/supabase";
+import { supabaseService } from "@/lib/supabaseService";
 
 type IcsEvent = {
   summary?: string;

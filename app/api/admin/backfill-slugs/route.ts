@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseService } from "@/lib/db/supabase";
+import { supabaseService } from "@/lib/supabaseService";
 import { slugifyEvent } from "@/lib/slug";
 import crypto from "crypto";
 
@@ -74,4 +74,3 @@ export async function POST() {
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
-

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import dayjs from "dayjs";
-import { supabaseService } from "@/lib/db/supabase";
+import { supabaseService } from "@/lib/supabaseService";
 
 const SG_BASE = "https://api.seatgeek.com/2/events";
 const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
