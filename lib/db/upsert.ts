@@ -32,7 +32,8 @@ export type NormalizedEvent = {
 };
 
 async function slugExists(slug: string): Promise<boolean> {
-  const { data, error } = await supabaseService
+  const sb = supabaseService();
+  const { data, error } = await sb
     .from("events")
     .select("id")
     .eq("slug", slug)
@@ -74,7 +75,8 @@ export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
     withSlugs.push({ ...e, slug: candidate });
   }
 
-  const { data, error } = await supabaseService
+  const sb2 = supabaseService();
+  const { data, error } = await sb2
     .from("events")
     .upsert(withSlugs, { onConflict: "source,source_id" })
     .select("*");

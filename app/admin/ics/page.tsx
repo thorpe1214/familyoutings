@@ -24,7 +24,7 @@ export default async function AdminIcsPage() {
       <h1 className="text-2xl font-semibold">ICS Feeds</h1>
       {error && <p className="text-red-600 text-sm">Error: {error}</p>}
 
-      <form action={addFeed} className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end border p-4 rounded-lg">
+      <form action={addFeed as any} className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end border p-4 rounded-lg">
         <div className="md:col-span-2">
           <label className="block text-sm font-medium">ICS URL</label>
           <input name="url" required className="w-full border rounded px-3 py-2" placeholder="https://example.org/calendar.ics" />

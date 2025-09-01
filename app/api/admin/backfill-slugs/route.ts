@@ -6,7 +6,8 @@ import crypto from "crypto";
 export const runtime = "nodejs";
 
 async function slugExists(slug: string): Promise<boolean> {
-  const { data, error } = await supabaseService
+  const sb = supabaseService();
+  const { data, error } = await sb
     .from("events")
     .select("id")
     .eq("slug", slug)
@@ -18,12 +19,13 @@ async function slugExists(slug: string): Promise<boolean> {
 
 export async function POST() {
   try {
+    const sb = supabaseService();
     const pageSize = 500;
     let offset = 0;
     let totalUpdated = 0;
 
     for (;;) {
-      const { data: rows, error } = await supabaseService
+      const { data: rows, error } = await sb
         .from("events")
         .select("id,title,start_utc,city,slug,source,source_id")
         .is("slug", null)
@@ -57,7 +59,7 @@ export async function POST() {
       }
 
       if (updates.length) {
-        const { error: upErr } = await supabaseService
+        const { error: upErr } = await sb
           .from("events")
           .upsert(updates, { onConflict: "id" });
         if (upErr) throw upErr;

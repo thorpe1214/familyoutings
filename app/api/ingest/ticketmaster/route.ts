@@ -218,7 +218,8 @@ export async function GET(req: Request) {
     const sourceIds = items.map((x) => x.source_id);
 
     // Determine inserted vs updated by checking existing rows
-    const { data: existing, error: existErr } = await supabaseService
+    const sb = supabaseService();
+    const { data: existing, error: existErr } = await sb
       .from("events")
       .select("source_id")
       .eq("source", "ticketmaster")
@@ -237,6 +238,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    const sb = supabaseService();
     const apiKey = process.env.TICKETMASTER_API_KEY || process.env.TM_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "TICKETMASTER_API_KEY missing" }, { status: 500 });
@@ -326,13 +328,13 @@ export async function POST(req: Request) {
 
     const venues = Array.from(venueMap.values());
     if (venues.length) {
-      const { error: vErr } = await supabaseService
+      const { error: vErr } = await sb
         .from("venue_cache")
         .upsert(venues, { onConflict: "source,source_id" });
       if (vErr) throw vErr;
       // Best-effort geometry fill
       try {
-        await supabaseService.rpc("venue_cache_set_geom_from_latlon");
+        await sb.rpc("venue_cache_set_geom_from_latlon");
       } catch {}
     }
 
@@ -340,7 +342,7 @@ export async function POST(req: Request) {
     const venueIds = Array.from(venueMap.keys());
     const venueIdLookup = new Map<string, number>();
     if (venueIds.length) {
-      const { data: vrows } = await supabaseService
+      const { data: vrows } = await sb
         .from("venue_cache")
         .select("id, source_id")
         .eq("source", "ticketmaster")
@@ -435,7 +437,7 @@ export async function POST(req: Request) {
 
     // Determine inserted vs updated
     const sourceIds = eventRows.map((e) => e.source_id);
-    const { data: existing, error: existErr } = await supabaseService
+    const { data: existing, error: existErr } = await sb
       .from("events")
       .select("source_id")
       .eq("source", "ticketmaster")
@@ -446,13 +448,13 @@ export async function POST(req: Request) {
     const updatedCount = sourceIds.filter((id) => existingSet.has(id)).length;
 
     if (eventRows.length) {
-      const { error: eErr } = await supabaseService
+      const { error: eErr } = await sb
         .from("events")
         .upsert(eventRows as any[], { onConflict: "source,source_id" });
       if (eErr) throw eErr;
       // Best-effort geometry propagation
       try {
-        await supabaseService.rpc("events_set_geom_from_venue");
+        await sb.rpc("events_set_geom_from_venue");
       } catch {}
     }
 

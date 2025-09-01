@@ -15,7 +15,8 @@ type IcsEvent = {
 
 async function geocodeCached(key: string): Promise<{ lat: number; lon: number } | null> {
   if (!key.trim()) return null;
-  const { data: hit } = await supabaseService
+  const sb = supabaseService();
+  const { data: hit } = await sb
     .from("venue_cache")
     .select("*")
     .eq("key", key)
@@ -37,7 +38,7 @@ async function geocodeCached(key: string): Promise<{ lat: number; lon: number } 
   const arr = await res.json();
   const first = Array.isArray(arr) && (arr as any)[0];
   if (first?.lat && first?.lon) {
-    await supabaseService.from("venue_cache").upsert({
+    await sb.from("venue_cache").upsert({
       key,
       lat: Number(first.lat),
       lon: Number(first.lon),

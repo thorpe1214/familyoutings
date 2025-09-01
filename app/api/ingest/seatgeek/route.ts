@@ -104,20 +104,21 @@ export async function POST(req: Request) {
       }
     }
     const venues = Array.from(venueMap.values());
+    const sb = supabaseService();
     if (venues.length) {
-      const { error: vErr } = await supabaseService
+      const { error: vErr } = await sb
         .from("venue_cache")
         .upsert(venues, { onConflict: "source,source_id" });
       if (vErr) throw vErr;
       try {
-        await supabaseService.rpc("venue_cache_set_geom_from_latlon");
+        await sb.rpc("venue_cache_set_geom_from_latlon");
       } catch {}
     }
 
     const venueIds = Array.from(venueMap.keys());
     const venueIdLookup = new Map<string, number>();
     if (venueIds.length) {
-      const { data: vrows } = await supabaseService
+      const { data: vrows } = await sb
         .from("venue_cache")
         .select("id, source_id")
         .eq("source", "seatgeek")
@@ -184,7 +185,7 @@ export async function POST(req: Request) {
     }
 
     const sourceIds = rows.map((r) => r.source_id);
-    const { data: existing, error: existErr } = await supabaseService
+    const { data: existing, error: existErr } = await sb
       .from("events")
       .select("source_id")
       .eq("source", "seatgeek")
@@ -195,12 +196,12 @@ export async function POST(req: Request) {
     const updated = sourceIds.filter((id) => existingSet.has(id)).length;
 
     if (rows.length) {
-      const { error: eErr } = await supabaseService.from("events").upsert(rows as any[], {
+      const { error: eErr } = await sb.from("events").upsert(rows as any[], {
         onConflict: "source,source_id",
       });
       if (eErr) throw eErr;
       try {
-        await supabaseService.rpc("events_set_geom_from_venue");
+        await sb.rpc("events_set_geom_from_venue");
       } catch {}
     }
 
