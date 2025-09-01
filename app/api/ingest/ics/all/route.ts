@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseService } from "@/lib/supabaseService";
 import { parseICS } from "@/lib/ics/ingest";
 import { upsertEvents } from "@/lib/db/upsert";
 import type { NormalizedEvent } from "@/lib/db/upsert";
@@ -52,12 +52,7 @@ export async function GET(request: Request) {
   }
   try {
     const { searchParams } = new URL(request.url);
-    const SUPABASE_URL = process.env.SUPABASE_URL!;
-    const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE)!;
-    if (!SUPABASE_URL || !SERVICE_KEY) {
-      return NextResponse.json({ error: "Missing Supabase service env" }, { status: 500 });
-    }
-    const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    const supabase = supabaseService();
 
     // Load active feeds from DB
     const { data: feeds, error } = await supabase
@@ -130,12 +125,7 @@ export async function POST(request: Request) {
   }
   try {
     // We intentionally ignore the POST body (e.g., { days }) for ICS.
-    const SUPABASE_URL = process.env.SUPABASE_URL!;
-    const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE)!;
-    if (!SUPABASE_URL || !SERVICE_KEY) {
-      return NextResponse.json({ error: "Missing Supabase service env" }, { status: 500 });
-    }
-    const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    const supabase = supabaseService();
     const { data: feeds, error } = await supabase
       .from("ics_feeds")
       .select("url, city, state")
