@@ -34,12 +34,14 @@ type UseEventsParams = {
   radiusMiles?: number;
   startISO?: string;
   endISO?: string;
+  range?: string; // today | weekend | 7d | all
   free?: "" | "free" | "paid";
   age?: string; // "All Ages" | "0–5" | "6–12" | "Teens" | ""
   io?: "" | "Indoor" | "Outdoor";
   sort?: "start_asc" | "start_desc";
   cursorStart?: string; // ISO
   cursorId?: number; // last id from previous page
+  zip?: string; // optional: used only to decide if geo should be sent
 };
 
 export function mapRowToClient(row: any): ClientEvent {
@@ -77,23 +79,49 @@ export function useEvents(params: UseEventsParams = {}) {
     radiusMiles,
     startISO,
     endISO,
+    range,
     free = "",
     age = "",
     io = "",
     sort = "start_asc",
     cursorStart,
     cursorId,
+    zip,
   } = params;
 
   const qs = useMemo(() => {
     const q = new URLSearchParams();
     if (limit) q.set("limit", String(limit));
     if (offset) q.set("offset", String(offset));
-    if (lat != null && !Number.isNaN(lat)) q.set("lat", String(lat));
-    if (lon != null && !Number.isNaN(lon)) q.set("lon", String(lon));
-    if (radiusMiles != null && !Number.isNaN(radiusMiles)) q.set("radiusMiles", String(radiusMiles));
-    if (startISO) q.set("startISO", startISO);
-    if (endISO) q.set("endISO", endISO);
+
+    // Range/dates: only add explicit dates when range is not "all".
+    if (range) {
+      if (range !== "all") {
+        q.set("range", range);
+        if (startISO) q.set("startISO", startISO);
+        if (endISO) q.set("endISO", endISO);
+      } else {
+        q.set("range", "all");
+      }
+    } else {
+      // No explicit range provided: preserve behavior if both dates are present; otherwise mark as all
+      if (startISO && endISO) {
+        q.set("startISO", startISO);
+        q.set("endISO", endISO);
+      } else {
+        q.set("range", "all");
+      }
+    }
+
+    // Geo only if we truly have it (ZIP or lat+lon). Radius is optional.
+    if (zip || (lat != null && !Number.isNaN(lat) && lon != null && !Number.isNaN(lon))) {
+      if (lat != null && !Number.isNaN(lat) && lon != null && !Number.isNaN(lon)) {
+        q.set("lat", String(lat));
+        q.set("lon", String(lon));
+      }
+      if (radiusMiles != null && !Number.isNaN(radiusMiles)) q.set("radiusMiles", String(radiusMiles));
+    }
+
     if (free) q.set("free", free);
     if (age) q.set("age", age);
     if (io) q.set("io", io);
@@ -101,7 +129,7 @@ export function useEvents(params: UseEventsParams = {}) {
     if (cursorStart) q.set("cursorStart", cursorStart);
     if (cursorId != null && !Number.isNaN(cursorId)) q.set("cursorId", String(cursorId));
     return q.toString();
-  }, [limit, offset, lat, lon, radiusMiles, startISO, endISO, free, age, io, sort, cursorStart, cursorId]);
+  }, [limit, offset, lat, lon, radiusMiles, startISO, endISO, range, free, age, io, sort, cursorStart, cursorId, zip]);
 
   const [items, setItems] = useState<ClientEvent[]>([]);
   const [count, setCount] = useState<number>(0);
