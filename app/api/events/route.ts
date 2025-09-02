@@ -3,66 +3,60 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/db/supabase";
 
 /**
- * Always returns ONLY kid-friendly events.
- * Adds robust error handling and a fallback sort so we don't 500 if a column name differs.
- *
- * Query params (optional):
- *   - limit: number (default 30, max 100)
- *   - debug: "1" to include error details in response (never enable in production)
+ * Family-only events endpoint.
+ * - Always enforces kid_allowed = true.
+ * - Optional: ?limit=30
+ * - Sorts in-memory by the first existing key among common start fields.
  */
 export async function GET(req: Request) {
+  const supabase = createClient();
   const url = new URL(req.url);
-  const debug = url.searchParams.get("debug") === "1";
-
-  const rawLimit = Number(url.searchParams.get("limit"));
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 30;
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "30", 10), 1), 100);
 
   try {
-    const supabase = createClient();
-
-    // Base select (adjust columns if you prefer a narrower payload)
-    const base = supabase
+    const { data, error } = await supabase
       .from("events")
       .select("*")
-      .eq("kid_allowed", true); // 🔒 family-only lock
+      .eq("kid_allowed", true)
+      .limit(limit); // no SQL ORDER BY to avoid unknown-column errors
 
-    // Try preferred ordering by start_time first
-    let { data, error } = await base
-      .order("start_time", { ascending: true, nullsFirst: true })
-      .limit(limit);
-
-    // If the column doesn't exist (common SQL code 42703) or any ordering error, fall back to created_at
     if (error) {
-      // eslint-disable-next-line no-console
-      console.error("[/api/events] primary order error:", error);
-      const fallback = supabase
-        .from("events")
-        .select("*")
-        .eq("kid_allowed", true)
-        .order("created_at", { ascending: false, nullsFirst: true })
-        .limit(limit);
-
-      const res2 = await fallback;
-      data = res2.data;
-      error = res2.error;
-
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error("[/api/events] fallback order also failed:", error);
-        if (debug) {
-          return NextResponse.json({ ok: false, error: error.message, code: (error as any).code }, { status: 500 });
-        }
-        return NextResponse.json({ ok: false, error: "Internal error fetching events." }, { status: 500 });
-      }
+      console.error("[/api/events] Supabase error:", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, events: data ?? [] });
-  } catch (e: any) {
-    // eslint-disable-next-line no-console
-    console.error("[/api/events] unhandled error:", e);
-    if (debug) {
-      return NextResponse.json({ ok: false, error: String(e?.message ?? e) }, { status: 500 });
+    const events = (data ?? []).slice(); // copy
+
+    // Try common start-time keys, in order of likelihood.
+    const candidateKeys = [
+      "start_time",
+      "start",
+      "start_at",
+      "start_date",
+      "start_local",
+      "dtstart",
+      "starts_at",
+    ] as const;
+
+    // Detect first present key
+    const sortKey =
+      events.length > 0
+        ? (candidateKeys.find((k) => Object.prototype.hasOwnProperty.call(events[0], k)) as
+            | (typeof candidateKeys)[number]
+            | undefined)
+        : undefined;
+
+    if (sortKey) {
+      events.sort((a: any, b: any) => {
+        const da = a?.[sortKey] ? new Date(a[sortKey]).getTime() : Number.POSITIVE_INFINITY;
+        const db = b?.[sortKey] ? new Date(b[sortKey]).getTime() : Number.POSITIVE_INFINITY;
+        return da - db;
+      });
     }
-    return NextResponse.json({ ok: false, error: "Internal error." }, { status: 500 });
+
+    return NextResponse.json({ events });
+  } catch (err: any) {
+    console.error("[/api/events] Uncaught error:", err);
+    return NextResponse.json({ error: err?.message || "Internal Server Error" }, { status: 500 });
   }
 }
