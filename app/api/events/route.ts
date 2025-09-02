@@ -26,11 +26,14 @@ export async function GET(req: Request) {
   const range = url.searchParams.get("range");
   const free = url.searchParams.get("free"); // "free" or "paid"
   const age = url.searchParams.get("age");
+  const cursorStart = url.searchParams.get("cursorStart"); // ISO string
+  const cursorIdStr = url.searchParams.get("cursorId");
+  const cursorId = cursorIdStr ? Number(cursorIdStr) : undefined;
 
   try {
     let q = supabase
       .from("events")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("kid_allowed", true) as any;
 
     // Date filter ONLY if range or explicit dates are provided
@@ -61,13 +64,31 @@ export async function GET(req: Request) {
       }
     }
 
-    const { data, error } = await q.order("start_utc", { ascending: true }).limit(limit);
+    // Keyset pagination: order by start_utc asc, then id asc. If cursor provided, fetch strictly after it.
+    q = q.order("start_utc", { ascending: true }).order("id", { ascending: true });
+
+    if (cursorStart && !Number.isNaN(Date.parse(cursorStart)) && Number.isFinite(cursorId as number)) {
+      // (start_utc > cursorStart) OR (start_utc = cursorStart AND id > cursorId)
+      q = q.or(
+        `start_utc.gt.${cursorStart},and(start_utc.eq.${cursorStart},id.gt.${cursorId})`
+      );
+    }
+
+    const limitPlusOne = Math.min(limit + 1, 101); // keep a hard ceiling
+    const { data, error, count } = await q.limit(limitPlusOne);
 
     if (error) {
       console.error("[/api/events] Supabase error:", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    return NextResponse.json({ events: data ?? [] });
+    const rows = data ?? [];
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const last = items[items.length - 1];
+    const nextCursor = hasMore && last
+      ? { cursorStart: last.start_utc, cursorId: last.id }
+      : null;
+    return NextResponse.json({ items, count: count ?? items.length, nextCursor });
   } catch (err: any) {
     console.error("[/api/events] Uncaught error:", err);
     return NextResponse.json({ error: err?.message || "Internal Server Error" }, { status: 500 });
