@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { parseICS } from "@/lib/ics/ingest";
 import { upsertEvents } from "@/lib/db/upsert";
-import type { NormalizedEvent } from "@/lib/db/upsert";
-import { detectFamilyHeuristic } from "@/lib/heuristics/family";
+import type { NormalizedEvent } from "@/lib/events/normalize";
 
 // Simple in-memory rate limiter: 10 requests/min per IP
 type Bucket = { count: number; resetAt: number };
@@ -78,10 +77,6 @@ export async function GET(req: Request) {
         const u = unique[i];
         try {
           const items = await parseICS(u);
-          for (const it of items) {
-            const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
-            it.is_family = detectFamilyHeuristic(blob);
-          }
           collected.push(...items);
         } catch (e: any) {
           errors.push({ url: u, error: String(e?.message || e) });
@@ -91,6 +86,7 @@ export async function GET(req: Request) {
     const workers = Array.from({ length: Math.min(concurrency, unique.length) }, () => worker());
     await Promise.all(workers);
 
+    // is_family and kid_allowed are sanitized in the ingest mapper
     const inserted = await upsertEvents(collected);
     return NextResponse.json(
       { urls: unique.length, parsed: collected.length, inserted, errors },
@@ -116,14 +112,23 @@ export async function POST(req: Request) {
     });
   }
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const url: string | undefined = body?.url;
-    const city: string | undefined = body?.city || undefined;
-    const state: string | undefined = body?.state || undefined;
+    const { url, city, state } = await req.json().catch(() => ({} as any));
+
     if (!url || typeof url !== "string") {
-      return NextResponse.json({ error: "url required" }, { status: 400 });
+      return NextResponse.json({ error: "Missing url" }, { status: 400 });
     }
-    const items = await parseICS(url);
+
+    // Accept relative paths like "/ics/sample.ics" and normalize to absolute using request origin
+    const baseOrigin = new URL(req.url).origin;
+    let normalizedUrl: string;
+    try {
+      normalizedUrl = new URL(url, baseOrigin).toString();
+    } catch {
+      return NextResponse.json({ error: "Invalid url" }, { status: 400 });
+    }
+
+    const items = await parseICS(normalizedUrl);
+
     // Optionally override city/state if provided
     if (city || state) {
       for (const it of items) {
@@ -131,13 +136,15 @@ export async function POST(req: Request) {
         if (state) (it as any).state = state;
       }
     }
-    for (const it of items) {
-      const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
-      it.is_family = detectFamilyHeuristic(blob);
-    }
+
+    // is_family and kid_allowed are already sanitized in the ingest mapper
     const inserted = await upsertEvents(items as NormalizedEvent[]);
-    return NextResponse.json({ urls: 1, parsed: items.length, inserted, errors: [] }, { headers: { "Cache-Control": "no-store" } });
+    console.log("[/api/ingest/ics]", { feedUrl: normalizedUrl, parsedCount: items.length, upsertedCount: inserted });
+    return NextResponse.json({ ok: true, urls: 1, parsed: items.length, inserted, errors: [] }, {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (e: any) {
+    console.error("[/api/ingest/ics] error:", e);
     return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
   }
 }

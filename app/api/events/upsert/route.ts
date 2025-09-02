@@ -1,35 +1,10 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { upsertEvents } from "@/lib/db/upsert";
+import { NormalizedEventSchema } from "@/lib/events/normalize";
 
 export const runtime = "nodejs";
 
-const NormalizedEventSchema = z.object({
-  source: z.string(),
-  source_id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  start_utc: z.string(),
-  end_utc: z.string(),
-  venue_name: z.string(),
-  address: z.string(),
-  city: z.string(),
-  state: z.string(),
-  lat: z.number(),
-  lon: z.number(),
-  is_free: z.boolean(),
-  price_min: z.number(),
-  price_max: z.number(),
-  currency: z.string(),
-  age_band: z.string(),
-  indoor_outdoor: z.string(),
-  family_claim: z.string(),
-  parent_verified: z.boolean(),
-  source_url: z.string().url(),
-  image_url: z.string(),
-  tags: z.array(z.string()),
-  is_family: z.boolean().nullable().optional(),
-});
+// Reuse the shared schema
 
 export async function POST(request: Request) {
   try {

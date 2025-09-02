@@ -27,7 +27,7 @@ export async function POST() {
     for (;;) {
       const { data: rows, error } = await sb
         .from("events")
-        .select("id,title,start_utc,city,slug,source,source_id")
+        .select("id,title,start_utc,city,slug,source,external_id")
         .is("slug", null)
         .order("start_utc", { ascending: true })
         .range(offset, offset + pageSize - 1);
@@ -40,12 +40,18 @@ export async function POST() {
 
       for (const r of rows) {
         const base = slugifyEvent(r.title || "", r.start_utc || "", r.city || "");
-        let candidate = base || crypto.createHash("sha1").update(`${r.source}:${r.source_id}:${r.start_utc}`).digest("hex").slice(0, 10);
+        let candidate =
+          base ||
+          crypto
+            .createHash("sha1")
+            .update(`${r.source}:${r.external_id}:${r.start_utc}`)
+            .digest("hex")
+            .slice(0, 10);
 
         if (seen.has(candidate) || (await slugExists(candidate))) {
           const hash = crypto
             .createHash("sha1")
-            .update(`${r.source}:${r.source_id}:${r.start_utc}`)
+            .update(`${r.source}:${r.external_id}:${r.start_utc}`)
             .digest("hex")
             .slice(0, 6);
           candidate = `${base}-${hash}`;

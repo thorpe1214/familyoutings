@@ -1,102 +1,55 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
-import { kidAllowedFromText } from "@/lib/kids";
+import { detectKidAllowed } from "@/lib/heuristics/family";
+import dayjs from "dayjs";
 
-const ADMIN_TOKEN = process.env.BACKFILL_ADMIN_TOKEN!;
+export const runtime = "nodejs";
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    if (!ADMIN_TOKEN) {
-      return NextResponse.json({ ok: false, error: "BACKFILL_ADMIN_TOKEN not configured" }, { status: 500 });
-    }
-    if (req.headers.get("x-admin-token") !== ADMIN_TOKEN) {
+    const token = req.headers.get("x-admin-token");
+    if (!token || token !== process.env.BACKFILL_ADMIN_TOKEN) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return NextResponse.json(
-        { ok: false, error: "Missing SUPABASE_SERVICE_ROLE_KEY. Set it in .env.local (see .env.local.example)." },
-        { status: 500 }
-      );
-    }
-
-    const url = new URL(req.url);
-    const qpDry = url.searchParams.get("dryRun");
-    const body = await req.json().catch(() => ({} as any));
-    const dryRun = body?.dryRun === true || qpDry === "1";
-    const batchSizeRaw = body?.batchSize;
-    const batchSize = Number.isFinite(Number(batchSizeRaw)) ? Number(batchSizeRaw) : 500;
-
-    const supabase = supabaseService();
-
+    const sb = supabaseService();
+    const since = dayjs().subtract(60, "day").toISOString();
+    const pageSize = 500;
+    let offset = 0;
     let scanned = 0;
     let updated = 0;
-    let lastId: number | null = null;
-    for (;;) {
-      let q = supabase
-        .from("events")
-        .select(
-          [
-            "id",
-            // Prefer broader set of columns to build a useful blob
-            "title",
-            "description",
-            "tags",
-            "city",
-            "state",
-            "postal_code",
-            "family_claim",
-            "venue_name",
-            "source_url",
-          ].join(",")
-        )
-        .is("kid_allowed", null)
-        .order("id", { ascending: true })
-        .limit(batchSize);
-      if (lastId !== null) {
-        q = q.gt("id", lastId);
-      }
 
-      const { data: rows, error } = await q;
+    for (;;) {
+      const { data: rows, error } = await sb
+        .from("events")
+        .select("id,title,description,tags,start_utc")
+        .gte("start_utc", since)
+        .is("kid_allowed", null)
+        .order("start_utc", { ascending: false })
+        .range(offset, offset + pageSize - 1);
       if (error) throw error;
       if (!rows || rows.length === 0) break;
-
       scanned += rows.length;
 
-      const updates = rows
-        .map((r: any) => {
-          const blob = [
-            r.title,
-            r.description,
-            r.family_claim,
-            r.venue_name,
-            r.city,
-            r.state,
-            r.postal_code,
-            Array.isArray(r.tags) ? r.tags.join(" ") : r.tags,
-            r.source_url,
-          ]
-            .filter(Boolean)
-            .join(" \n ");
-          // Only set kid_allowed = true where clearly allowed.
-          // Otherwise leave as NULL for future evaluation.
-          const isAllowed = kidAllowedFromText(blob, false);
-          return isAllowed ? { id: r.id, kid_allowed: true } : null;
-        })
-        .filter(Boolean) as Array<{ id: number; kid_allowed: true }>;
-
-      if (!dryRun) {
-        const { error: uerr } = await supabase.from("events").upsert(updates, { onConflict: "id" });
-        if (uerr) throw uerr;
+      const updates: { id: string; kid_allowed: boolean }[] = [];
+      for (const r of rows as any[]) {
+        const blob = `${r.title || ""} ${r.description || ""} ${Array.isArray(r.tags) ? r.tags.join(" ") : ""}`;
+        const v = detectKidAllowed(blob);
+        if (v !== null) updates.push({ id: r.id, kid_allowed: v });
+      }
+      if (updates.length) {
+        const { error: upErr } = await sb.from("events").upsert(updates, { onConflict: "id" });
+        if (upErr) throw upErr;
+        updated += updates.length;
       }
 
-      updated += updates.length;
-      lastId = rows[rows.length - 1].id as number;
-      if (rows.length < batchSize) break;
+      if (rows.length < pageSize) break;
+      offset += pageSize;
     }
 
-    return NextResponse.json({ ok: true, dryRun, scanned, updated });
+    return NextResponse.json({ ok: true, scanned, updated });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "error" }, { status: 500 });
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 }
+

@@ -8,17 +8,19 @@ import type { EventItem } from "@/lib/types";
 import dayjs from "dayjs";
 
 type Props = {
-  lat: number;
-  lon: number;
-  radiusMiles: number;
+  lat?: number;
+  lon?: number;
+  radiusMiles?: number;
+  zip?: string;
   startISO?: string | null;
   endISO?: string | null;
+  range?: "today" | "weekend" | "7d" | "all";
   free?: "" | "free" | "paid";
   age?: string;
   io?: "" | "Indoor" | "Outdoor";
 };
 
-export default function EventsFeedClient({ lat, lon, radiusMiles, startISO, endISO, free = "", age = "", io = "" }: Props) {
+export default function EventsFeedClient({ lat, lon, radiusMiles, zip, startISO, endISO, range, free = "", age = "", io = "" }: Props) {
   const [pageSize, setPageSize] = useState(50);
 
   useEffect(() => {
@@ -41,8 +43,10 @@ export default function EventsFeedClient({ lat, lon, radiusMiles, startISO, endI
     lat,
     lon,
     radiusMiles,
+    zip,
     startISO: startISO || undefined,
     endISO: endISO || undefined,
+    range,
     free,
     age,
     io,

@@ -15,7 +15,7 @@ export default async function Home({ searchParams }: PageProps) {
   const free = (searchParams?.free as string) || ""; // "free" | "paid" | ""
   const age = (searchParams?.age as string) || "";
   const io = (searchParams?.io as string) || "";
-  const zipParam = (searchParams?.zip as string) || "97227";
+  const zipParam = (searchParams?.zip as string) || "";
   const radiusParam = (searchParams?.radius as string) || "10"; // miles
 
   const now = dayjs();
@@ -44,7 +44,7 @@ export default async function Home({ searchParams }: PageProps) {
     rangeEnd = null;
   }
 
-  const zipInfo = lookupZip(zipParam);
+  const zipInfo = zipParam ? lookupZip(zipParam) : null;
   const headerLocation = zipInfo ? `${zipInfo.city}, ${zipInfo.state}` : null;
 
   // Optional: pre-check for empty state by calling /api/events for the first page
@@ -128,15 +128,27 @@ export default async function Home({ searchParams }: PageProps) {
             lat={zipInfo.lat}
             lon={zipInfo.lon}
             radiusMiles={Number(radiusParam) || 10}
+            zip={zipParam}
             startISO={rangeStart ? rangeStart.toISOString() : null}
             endISO={rangeEnd ? rangeEnd.toISOString() : null}
+            range={range}
             free={free as any}
             age={age}
             io={io as any}
           />
         )
       ) : (
-        <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">ZIP not found</p>
+        // No ZIP provided or not found: render unfiltered list (no GEO params)
+        <EventsFeedClient
+          zip={zipParam || undefined}
+          radiusMiles={Number(radiusParam) || 10}
+          startISO={rangeStart ? rangeStart.toISOString() : null}
+          endISO={rangeEnd ? rangeEnd.toISOString() : null}
+          range={range}
+          free={free as any}
+          age={age}
+          io={io as any}
+        />
       )}
       <footer className="text-sm text-gray-600 border-t pt-4">
         Family-friendly status is based on organizer info and community input; not guaranteed. Please use discretion.

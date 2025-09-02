@@ -1,35 +1,7 @@
 import { supabaseService } from "@/lib/supabaseService";
 import { slugifyEvent } from "@/lib/slug";
 import crypto from "crypto";
-
-export type NormalizedEvent = {
-  source: string;
-  source_id: string;
-  title: string;
-  description: string;
-  start_utc: string; // ISO string
-  end_utc: string; // ISO string
-  venue_name: string;
-  address: string;
-  city: string;
-  state: string;
-  lat: number | null;
-  lon: number | null;
-  is_free: boolean;
-  price_min: number;
-  price_max: number;
-  currency: string;
-  age_band: string;
-  indoor_outdoor: string;
-  family_claim: string;
-  parent_verified: boolean;
-  source_url: string;
-  image_url: string;
-  tags: string[];
-  slug?: string;
-  is_family?: boolean | null;
-  kid_allowed?: boolean | null;
-};
+import type { NormalizedEvent } from "@/lib/events/normalize";
 
 async function slugExists(slug: string): Promise<boolean> {
   const sb = supabaseService();
@@ -46,14 +18,28 @@ async function slugExists(slug: string): Promise<boolean> {
 export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
   if (!events || events.length === 0) return 0;
 
+  // Sanitize fields prior to slugging/upsert
+  // - kid_allowed: only send if it's a boolean; drop otherwise
+  // - is_family: never send to DB (legacy internal heuristic)
+  const sanitized: NormalizedEvent[] = events.map((e) => {
+    const copy: any = { ...e };
+    if (typeof copy.kid_allowed !== "boolean") delete copy.kid_allowed;
+    if ("is_family" in copy) delete copy.is_family;
+    return copy as NormalizedEvent;
+  });
+
   // Ensure slugs
   const seen = new Set<string>();
   const withSlugs: NormalizedEvent[] = [];
-  for (const e of events) {
+  for (const e of sanitized) {
     let slug = e.slug && e.slug.length ? e.slug : slugifyEvent(e.title, e.start_utc, e.city);
     if (!slug) {
       // Fallback to a hash-only slug if absolutely necessary
-      slug = crypto.createHash("sha1").update(`${e.source}:${e.source_id}:${e.start_utc}`).digest("hex").slice(0, 10);
+      slug = crypto
+        .createHash("sha1")
+        .update(`${e.source}:${e.external_id}:${e.start_utc}`)
+        .digest("hex")
+        .slice(0, 10);
     }
 
     // Avoid duplicates within this batch
@@ -61,7 +47,7 @@ export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
     if (seen.has(candidate) || (await slugExists(candidate))) {
       const hash = crypto
         .createHash("sha1")
-        .update(`${e.source}:${e.source_id}:${e.start_utc}`)
+        .update(`${e.source}:${e.external_id}:${e.start_utc}`)
         .digest("hex")
         .slice(0, 6);
       candidate = `${slug}-${hash}`;
@@ -78,7 +64,7 @@ export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
   const sb2 = supabaseService();
   const { data, error } = await sb2
     .from("events")
-    .upsert(withSlugs, { onConflict: "source,source_id" })
+    .upsert(withSlugs, { onConflict: "external_id,source" })
     .select("*");
 
   if (error) throw error;

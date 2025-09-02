@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import dayjs from "dayjs";
 import { supabaseService } from "@/lib/supabaseService";
+import { upsertEvents } from "@/lib/db/upsert";
 
 const SG_BASE = "https://api.seatgeek.com/2/events";
 const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
@@ -75,7 +76,7 @@ export async function POST(req: Request) {
     // Upsert venues
     type VenueRow = {
       source: string;
-      source_id: string;
+      external_id: string;
       name?: string | null;
       city?: string | null;
       state?: string | null;
@@ -93,7 +94,7 @@ export async function POST(req: Request) {
         const lon = v?.location?.lon ?? v?.lon ?? null;
         venueMap.set(vid, {
           source: "seatgeek",
-          source_id: vid,
+          external_id: vid,
           name: v?.name ?? null,
           city: v?.city ?? null,
           state: v?.state ?? null,
@@ -108,7 +109,7 @@ export async function POST(req: Request) {
     if (venues.length) {
       const { error: vErr } = await sb
         .from("venue_cache")
-        .upsert(venues, { onConflict: "source,source_id" });
+        .upsert(venues, { onConflict: "external_id,source" });
       if (vErr) throw vErr;
       try {
         await sb.rpc("venue_cache_set_geom_from_latlon");
@@ -120,34 +121,14 @@ export async function POST(req: Request) {
     if (venueIds.length) {
       const { data: vrows } = await sb
         .from("venue_cache")
-        .select("id, source_id")
+        .select("id, external_id")
         .eq("source", "seatgeek")
-        .in("source_id", venueIds);
-      for (const r of vrows ?? []) venueIdLookup.set(r.source_id as string, r.id as number);
+        .in("external_id", venueIds);
+      for (const r of vrows ?? []) venueIdLookup.set(r.external_id as string, r.id as number);
     }
 
-    // Upsert events
-    type EventRow = {
-      source: string;
-      source_id: string;
-      title: string;
-      source_url: string | null;
-      start_utc: string;
-      end_utc: string | null;
-      price_min: number | null;
-      price_max: number | null;
-      currency: string | null;
-      is_free: boolean | null;
-      tags: string[] | null;
-      venue_id: number | null;
-      venue_name?: string | null;
-      city?: string | null;
-      state?: string | null;
-      postal_code?: string | null;
-      kid_allowed?: boolean | null;
-    };
-
-    const rows: EventRow[] = [];
+    // Upsert events via unified helper
+    const rows: any[] = [];
     for (const ev of collected) {
       const id = ev?.id != null ? String(ev.id) : undefined;
       if (!id) continue;
@@ -165,47 +146,33 @@ export async function POST(req: Request) {
       const kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : null;
       rows.push({
         source: "seatgeek",
-        source_id: id,
+        external_id: id,
         title: ev?.title ?? ev?.short_title ?? "Untitled",
-        source_url: ev?.url ?? null,
+        description: ev?.description ?? "",
         start_utc: start,
-        end_utc: null,
-        price_min: priceMin,
-        price_max: priceMax,
-        currency: null,
+        end_utc: "",
+        venue_name: v?.name ?? "",
+        address: v?.address ?? "",
+        city: v?.city ?? "",
+        state: v?.state ?? "",
+        lat: v?.location?.lat != null ? Number(v.location.lat) : v?.lat != null ? Number(v.lat) : null,
+        lon: v?.location?.lon != null ? Number(v.location.lon) : v?.lon != null ? Number(v.lon) : null,
         is_free: null,
-        tags: taxNames.length ? taxNames : null,
-        venue_id,
-        venue_name: v?.name ?? null,
-        city: v?.city ?? null,
-        state: v?.state ?? null,
-        postal_code: v?.postal_code ?? null,
+        price_min: priceMin ?? 0,
+        price_max: priceMax ?? 0,
+        currency: "",
+        age_band: "All Ages",
+        indoor_outdoor: "Mixed",
+        family_claim: "family",
+        parent_verified: false,
+        source_url: ev?.url ?? "",
+        image_url: Array.isArray(ev?.performers) && ev.performers[0]?.image ? ev.performers[0].image : "",
+        tags: taxNames,
         kid_allowed,
       });
     }
-
-    const sourceIds = rows.map((r) => r.source_id);
-    const { data: existing, error: existErr } = await sb
-      .from("events")
-      .select("source_id")
-      .eq("source", "seatgeek")
-      .in("source_id", sourceIds);
-    if (existErr) throw existErr;
-    const existingSet = new Set((existing ?? []).map((r: any) => r.source_id));
-    const inserted = sourceIds.filter((id) => !existingSet.has(id)).length;
-    const updated = sourceIds.filter((id) => existingSet.has(id)).length;
-
-    if (rows.length) {
-      const { error: eErr } = await sb.from("events").upsert(rows as any[], {
-        onConflict: "source,source_id",
-      });
-      if (eErr) throw eErr;
-      try {
-        await sb.rpc("events_set_geom_from_venue");
-      } catch {}
-    }
-
-    return NextResponse.json({ ok: true, totalFetched: collected.length, inserted, updated });
+    const count = await upsertEvents(rows as any);
+    return NextResponse.json({ ok: true, totalFetched: collected.length, upserted: count });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }

@@ -74,7 +74,13 @@ export async function GET(req: Request) {
 
     // Summaries if both succeeded
     if (icsRes.ok || tmRes.ok || (postalCode && sgRes?.ok)) {
-      return NextResponse.json(out, { headers: { "Cache-Control": "no-store" } });
+      const results: any[] = [];
+      results.push({ source: "ticketmaster", ok: !!tmRes.ok, count: (tmRes.json?.inserted ?? 0) + (tmRes.json?.updated ?? 0), errors: tmRes.ok ? undefined : tmRes.json?.error });
+      results.push({ source: "ics", ok: !!icsRes.ok, count: icsRes.json?.inserted ?? 0, errors: icsRes.ok ? undefined : icsRes.json?.error });
+      if (postalCode) {
+        results.push({ source: "seatgeek", ok: !!sgRes?.ok, count: sgRes?.json?.inserted ?? 0 + (sgRes?.json?.updated ?? 0), errors: sgRes?.ok ? undefined : sgRes?.json?.error });
+      }
+      return NextResponse.json({ ok: true, results, detail: out }, { headers: { "Cache-Control": "no-store" } });
     }
     return NextResponse.json(out, { status: 500 });
   } catch (e: any) {

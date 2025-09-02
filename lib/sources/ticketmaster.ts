@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import type { NormalizedEvent } from "@/lib/db/upsert";
+import type { NormalizedEvent } from "@/lib/events/normalize";
 import { detectFamilyHeuristic } from "@/lib/heuristics/family";
 const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
 const FAMILY_RE = /(\b(kids?|family|toddler|children|all\s*ages|story\s*time|library|parent|sensory|puppet|zoo|aquarium|park|craft|lego|museum|family[-\s]?friendly)\b)/i;
@@ -79,7 +79,7 @@ export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEve
 
       const item: NormalizedEvent = {
         source: "ticketmaster",
-        source_id: ev?.id ?? `${name}-${start}`,
+        external_id: ev?.id ?? `${name}-${start}`,
         title: name,
         description: ev?.info || ev?.pleaseNote || ev?.description || "",
         start_utc: start,
@@ -103,7 +103,7 @@ export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEve
         tags: seg ? [seg] : ["ticketmaster"],
       } as NormalizedEvent;
       const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")}`.toLowerCase();
-      item.is_family = detectFamilyHeuristic(blob);
+      // Only set kid_allowed for DB writes; keep heuristics internal if desired
       item.kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : true;
       return item;
     })

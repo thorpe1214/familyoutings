@@ -45,3 +45,15 @@ Only kid-friendly events, all in one place.
 - Eventbrite Discovery is not supported with personal tokens. Public discovery requires partner access; revisit if this changes. The codebase does not call Eventbrite.
 Admin
 - Backfill kid_allowed for existing rows: POST /api/admin/backfill-kid-allowed
+
+## Scheduling (prod)
+
+- Add Vercel Cron or external scheduler:
+  - POST /api/ingest/all hourly (or a few times per day)
+  - POST /api/admin/backfill-kid-allowed nightly with header `x-admin-token: BACKFILL_ADMIN_TOKEN`
+
+## Environments
+
+- Use separate Supabase projects for dev/prod.
+- In dev, configure `.env.local`; in prod, set Vercel env vars.
+- Expose only anon key to the browser; use service role exclusively in server routes.

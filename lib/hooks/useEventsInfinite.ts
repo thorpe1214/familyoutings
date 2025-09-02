@@ -10,11 +10,13 @@ type Params = {
   radiusMiles?: number;
   startISO?: string;
   endISO?: string;
+  range?: string; // today | weekend | 7d | all
   free?: "" | "free" | "paid";
   age?: string;
   io?: "" | "Indoor" | "Outdoor";
   sort?: "start_asc" | "start_desc";
   pageSize?: number;
+  zip?: string; // optional: only to decide if geo should be sent
 };
 
 export function useEventsInfinite({
@@ -23,25 +25,49 @@ export function useEventsInfinite({
   radiusMiles,
   startISO,
   endISO,
+  range,
   free = "",
   age = "",
   io = "",
   sort = "start_asc",
   pageSize = 50,
+  zip,
 }: Params) {
   const baseQS = useMemo(() => {
     const q = new URLSearchParams();
-    if (lat != null && !Number.isNaN(lat)) q.set("lat", String(lat));
-    if (lon != null && !Number.isNaN(lon)) q.set("lon", String(lon));
-    if (radiusMiles != null && !Number.isNaN(radiusMiles)) q.set("radiusMiles", String(radiusMiles));
-    if (startISO) q.set("startISO", startISO);
-    if (endISO) q.set("endISO", endISO);
+    // Geo only if we truly have it (ZIP or lat+lon)
+    if (zip || (lat != null && !Number.isNaN(lat) && lon != null && !Number.isNaN(lon))) {
+      if (lat != null && !Number.isNaN(lat) && lon != null && !Number.isNaN(lon)) {
+        q.set("lat", String(lat));
+        q.set("lon", String(lon));
+      }
+      if (radiusMiles != null && !Number.isNaN(radiusMiles)) q.set("radiusMiles", String(radiusMiles));
+    }
+
+    // Range/dates: do not add dates when range is "all"
+    if (range) {
+      if (range !== "all") {
+        q.set("range", range);
+        if (startISO) q.set("startISO", startISO);
+        if (endISO) q.set("endISO", endISO);
+      } else {
+        q.set("range", "all");
+      }
+    } else {
+      // No explicit range: preserve behavior if both dates present, otherwise default to all
+      if (startISO && endISO) {
+        q.set("startISO", startISO);
+        q.set("endISO", endISO);
+      } else {
+        q.set("range", "all");
+      }
+    }
     if (free) q.set("free", free);
     if (age) q.set("age", age);
     if (io) q.set("io", io);
     if (sort) q.set("sort", sort);
     return q.toString();
-  }, [lat, lon, radiusMiles, startISO, endISO, free, age, io, sort]);
+  }, [lat, lon, radiusMiles, startISO, endISO, range, free, age, io, sort, zip]);
 
   const [items, setItems] = useState<ClientEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -96,4 +122,3 @@ export function useEventsInfinite({
 
   return { items, loading, error, hasMore, loadMore };
 }
-

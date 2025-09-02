@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
 import { parseICS } from "@/lib/ics/ingest";
 import { upsertEvents } from "@/lib/db/upsert";
-import type { NormalizedEvent } from "@/lib/db/upsert";
-import { detectFamilyHeuristic } from "@/lib/heuristics/family";
+import type { NormalizedEvent } from "@/lib/events/normalize";
 
 // Simple in-memory rate limiter: 10 requests/min per IP
 type Bucket = { count: number; resetAt: number };
@@ -84,10 +83,6 @@ export async function GET(request: Request) {
               if (feed.state) (it as any).state = feed.state as any;
             }
           }
-          for (const it of items) {
-            const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
-            it.is_family = detectFamilyHeuristic(blob);
-          }
           collected.push(...items);
         } catch (e: any) {
           errors.push({ url: feed.url, error: String(e?.message || e) });
@@ -97,6 +92,7 @@ export async function GET(request: Request) {
     const workers = Array.from({ length: Math.min(concurrency, feedList.length) }, () => worker());
     await Promise.all(workers);
 
+    // is_family and kid_allowed are sanitized in the ingest mapper
     const inserted = await upsertEvents(collected);
     return NextResponse.json(
       { feeds: feedList.length, parsed: collected.length, inserted, errors, concurrency },
@@ -151,10 +147,6 @@ export async function POST(request: Request) {
               if (feed.state) (it as any).state = feed.state as any;
             }
           }
-          for (const it of items) {
-            const blob = `${it.title} ${it.description} ${(it.tags || []).join(" ")}`;
-            it.is_family = detectFamilyHeuristic(blob);
-          }
           collected.push(...items);
         } catch (e: any) {
           errors.push({ url: feed.url, error: String(e?.message || e) });
@@ -164,6 +156,7 @@ export async function POST(request: Request) {
     const workers = Array.from({ length: Math.min(concurrency, feedList.length) }, () => worker());
     await Promise.all(workers);
 
+    // is_family and kid_allowed are sanitized in the ingest mapper
     const inserted = await upsertEvents(collected);
     return NextResponse.json(
       { feeds: feedList.length, parsed: collected.length, inserted, errors, concurrency },

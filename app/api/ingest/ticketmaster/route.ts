@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import dayjs from "dayjs";
-import { upsertEvents, type NormalizedEvent } from "@/lib/db/upsert";
+import { upsertEvents } from "@/lib/db/upsert";
+import type { NormalizedEvent } from "@/lib/events/normalize";
 import { supabaseService } from "@/lib/supabaseService";
 import { detectFamilyHeuristic } from "@/lib/heuristics/family";
 const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
@@ -167,7 +168,7 @@ export async function GET(req: Request) {
 
       const e: NormalizedEvent = {
         source: "ticketmaster",
-        source_id: id,
+        external_id: id,
         title: name,
         description:
           ev?.info ||
@@ -210,24 +211,23 @@ export async function GET(req: Request) {
         .join(" ");
       const blob = `${e.title} ${e.description} ${extra} ${(e.tags || []).join(" ")}`.toLowerCase();
       e.kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : null;
-      e.is_family = detectFamilyHeuristic(blob);
       if (e.start_utc) byId.set(id, e);
     }
 
     const items = Array.from(byId.values());
-    const sourceIds = items.map((x) => x.source_id);
+    const externalIds = items.map((x) => x.external_id);
 
     // Determine inserted vs updated by checking existing rows
     const sb = supabaseService();
     const { data: existing, error: existErr } = await sb
       .from("events")
-      .select("source_id")
+      .select("external_id")
       .eq("source", "ticketmaster")
-      .in("source_id", sourceIds);
+      .in("external_id", externalIds);
     if (existErr) throw existErr;
-    const existingSet = new Set((existing ?? []).map((r: any) => r.source_id));
-    const insertedIds = sourceIds.filter((id) => !existingSet.has(id));
-    const updatedIds = sourceIds.filter((id) => existingSet.has(id));
+    const existingSet = new Set((existing ?? []).map((r: any) => r.external_id));
+    const insertedIds = externalIds.filter((id) => !existingSet.has(id));
+    const updatedIds = externalIds.filter((id) => existingSet.has(id));
 
     const upserted = await upsertEvents(items);
     return NextResponse.json({ inserted: insertedIds.length, updated: updatedIds.length, errors: [] });
@@ -293,10 +293,10 @@ export async function POST(req: Request) {
 
     const totalFetched = collected.length;
 
-    // 1) Upsert venues into venue_cache (source, source_id)
+    // 1) Upsert venues into venue_cache (source, external_id)
     type VenueRow = {
       source: string;
-      source_id: string;
+      external_id: string;
       name?: string | null;
       city?: string | null;
       state?: string | null;
@@ -315,7 +315,7 @@ export async function POST(req: Request) {
         const lon = v?.location?.longitude ? Number(v.location.longitude) : null;
         venueMap.set(vid, {
           source: "ticketmaster",
-          source_id: vid,
+          external_id: vid,
           name: v?.name ?? null,
           city: v?.city?.name ?? null,
           state: v?.state?.stateCode ?? null,
@@ -330,7 +330,7 @@ export async function POST(req: Request) {
     if (venues.length) {
       const { error: vErr } = await sb
         .from("venue_cache")
-        .upsert(venues, { onConflict: "source,source_id" });
+        .upsert(venues, { onConflict: "external_id,source" });
       if (vErr) throw vErr;
       // Best-effort geometry fill
       try {
@@ -338,41 +338,21 @@ export async function POST(req: Request) {
       } catch {}
     }
 
-    // Build lookup of venue_cache.id by (source_id)
+    // Build lookup of venue_cache.id by (external_id)
     const venueIds = Array.from(venueMap.keys());
     const venueIdLookup = new Map<string, number>();
     if (venueIds.length) {
       const { data: vrows } = await sb
         .from("venue_cache")
-        .select("id, source_id")
+        .select("id, external_id")
         .eq("source", "ticketmaster")
-        .in("source_id", venueIds);
+        .in("external_id", venueIds);
       for (const r of vrows ?? []) {
-        venueIdLookup.set(r.source_id as string, r.id as number);
+        venueIdLookup.set(r.external_id as string, r.id as number);
       }
     }
 
-    // 2) Prepare events rows
-    type EventRow = {
-      source: string;
-      source_id: string;
-      title: string;
-      source_url: string | null;
-      start_utc: string;
-      end_utc: string | null;
-      price_min: number | null;
-      price_max: number | null;
-      currency: string | null;
-      is_free: boolean | null;
-      tags: string[] | null;
-      venue_id: number | null;
-      venue_name?: string | null;
-      city?: string | null;
-      state?: string | null;
-      postal_code?: string | null;
-      is_family?: boolean | null;
-      kid_allowed?: boolean | null;
-    };
+    // 2) Prepare NormalizedEvent[] and upsert via shared helper
 
     function computePrice(ev: any): { min: number | null; max: number | null; currency: string | null; isFree: boolean | null } {
       const pr = Array.isArray(ev?.priceRanges) ? ev.priceRanges[0] : null;
@@ -385,7 +365,7 @@ export async function POST(req: Request) {
       return { min, max, currency, isFree };
     }
 
-    const eventRows: EventRow[] = [];
+    const normalized: NormalizedEvent[] = [];
     for (const ev of collected) {
       const id: string | undefined = ev?.id;
       if (!id) continue;
@@ -394,8 +374,6 @@ export async function POST(req: Request) {
       if (!start) continue;
       const price = computePrice(ev);
       const seg = Array.isArray(ev?.classifications) ? ev.classifications[0]?.segment?.name : null;
-      const venueSourceId = v?.id as string | undefined;
-      const venue_id = venueSourceId ? venueIdLookup.get(venueSourceId) ?? null : null;
 
       const tagsArr = seg ? [seg] : [];
       const extra = [
@@ -410,55 +388,45 @@ export async function POST(req: Request) {
         .filter(Boolean)
         .join(" ");
       const blob = `${ev?.name ?? ""} ${extra} ${tagsArr.join(" ")}`.toLowerCase();
-      const is_family = detectFamilyHeuristic(blob);
       const kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : null;
 
-      eventRows.push({
+      normalized.push({
         source: "ticketmaster",
-        source_id: id,
+        external_id: id,
         title: ev?.name ?? "Untitled",
-        source_url: ev?.url ?? null,
+        description:
+          ev?.info ||
+          ev?.pleaseNote ||
+          ev?.description ||
+          v?.generalInfo?.generalRule ||
+          v?.generalInfo?.childRule ||
+          v?.boxOfficeInfo?.openHoursDetail ||
+          "",
         start_utc: start,
-        end_utc: null,
-        price_min: price.min,
-        price_max: price.max,
-        currency: price.currency,
-        is_free: price.isFree,
-        tags: tagsArr.length ? tagsArr : null,
-        venue_id,
-        venue_name: v?.name ?? null,
-        city: v?.city?.name ?? null,
-        state: v?.state?.stateCode ?? null,
-        postal_code: v?.postalCode ?? null,
-        is_family,
+        end_utc: "",
+        venue_name: v?.name ?? "",
+        address: v?.address?.line1 ? `${v.address.line1}, ${v?.city?.name ?? ""} ${v?.state?.stateCode ?? ""} ${v?.postalCode ?? ""}`.trim() : v?.name ?? "",
+        city: v?.city?.name ?? "",
+        state: v?.state?.stateCode ?? "",
+        lat: v?.location?.latitude ? Number(v.location.latitude) : null,
+        lon: v?.location?.longitude ? Number(v.location.longitude) : null,
+        is_free: price.isFree ?? false,
+        price_min: price.min ?? 0,
+        price_max: price.max ?? 0,
+        currency: price.currency ?? "",
+        age_band: "All Ages",
+        indoor_outdoor: "Mixed",
+        family_claim: "family",
+        parent_verified: false,
+        source_url: ev?.url ?? "",
+        image_url: ev?.images?.[0]?.url ?? "",
+        tags: tagsArr,
         kid_allowed,
-      });
+      } as NormalizedEvent);
     }
 
-    // Determine inserted vs updated
-    const sourceIds = eventRows.map((e) => e.source_id);
-    const { data: existing, error: existErr } = await sb
-      .from("events")
-      .select("source_id")
-      .eq("source", "ticketmaster")
-      .in("source_id", sourceIds);
-    if (existErr) throw existErr;
-    const existingSet = new Set((existing ?? []).map((r: any) => r.source_id));
-    const insertedCount = sourceIds.filter((id) => !existingSet.has(id)).length;
-    const updatedCount = sourceIds.filter((id) => existingSet.has(id)).length;
-
-    if (eventRows.length) {
-      const { error: eErr } = await sb
-        .from("events")
-        .upsert(eventRows as any[], { onConflict: "source,source_id" });
-      if (eErr) throw eErr;
-      // Best-effort geometry propagation
-      try {
-        await sb.rpc("events_set_geom_from_venue");
-      } catch {}
-    }
-
-    return NextResponse.json({ ok: true, totalFetched, inserted: insertedCount, updated: updatedCount });
+    const upserted = await upsertEvents(normalized);
+    return NextResponse.json({ ok: true, totalFetched, upserted });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }

@@ -1,8 +1,23 @@
 import ical from "ical";
 import dayjs from "dayjs";
-import type { NormalizedEvent } from "@/lib/db/upsert";
+import type { NormalizedEvent } from "@/lib/events/normalize";
+import { sanitizeEvent } from "@/lib/events/normalize";
 import { detectFamilyHeuristic, detectKidAllowed } from "@/lib/heuristics/family";
 import { supabaseService } from "@/lib/supabaseService";
+
+// Ensure we only ever assign true/false into boolean columns.
+function toBooleanStrict(v: unknown): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (["true", "1", "yes", "y"].includes(s)) return true;
+    if (["false", "0", "no", "n"].includes(s)) return false;
+    // Treat label-y words as "unknown", not boolean
+    if (["family", "kid", "kids", "all-ages", "all ages"].includes(s)) return undefined;
+  }
+  return undefined;
+}
 
 type IcsEvent = {
   summary?: string;
@@ -101,9 +116,9 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
     const loc = ev.location || "";
 
     const geo = await geocodeCached(loc);
-    const item: NormalizedEvent = {
+    const item: NormalizedEvent = sanitizeEvent({
       source: `ics:${host}`,
-      source_id: ev.uid || `${title}-${start}`,
+      external_id: ev.uid || `${title}-${start}`,
       title,
       description: ev.description || "",
       start_utc: start,
@@ -120,14 +135,13 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
       currency: "",
       age_band: inferAgeBand(`${title} ${ev.description ?? ""}`),
       indoor_outdoor: inferIO(`${title} ${loc}`),
-      family_claim: "family",
       parent_verified: false,
       source_url: url,
       image_url: "",
       tags: ["ics"],
-    };
+    });
     const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")}`;
-    item.is_family = detectFamilyHeuristic(blob);
+    // Only compute and set kid_allowed; do not persist legacy is_family
     const kidAllowed = detectKidAllowed(blob);
     if (kidAllowed !== null) item.kid_allowed = kidAllowed;
     out.push(item);
