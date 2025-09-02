@@ -32,7 +32,7 @@ Only kid-friendly events, all in one place.
 
 4) Browse events
    - Home → set ZIP/radius, date range
-   - By default shows family-friendly and unknown; toggle "Include adult events" to show all
+   - Shows only kid-allowed events (adult events are never included)
    - Click a card → detail page → "Add to Calendar"
 
 ## Scripts
