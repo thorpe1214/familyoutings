@@ -1,89 +1,42 @@
-const WHITELIST = [
-  "kid",
-  "kids",
-  "family",
-  "toddler",
-  "children",
-  "child",
-  "storytime",
-  "library",
-  "parent",
-  "mom",
-  "dad",
-  "stroller",
-  "sensory",
-  "puppet",
-  "zoo",
-  "aquarium",
-  "park",
-  "playdate",
-  "craft",
-  "lego",
-  "museum",
-  "family-friendly",
-  "all ages",
-];
+// Heuristics for whether an event is kid-allowed.
+// Return false if we find strong "adults-only" language.
+// Return true for strong "family/kids" cues.
+// Otherwise return null and let callers decide whether to leave as-is.
 
-const EXCLUDE = [
-  "21+",
-  "21 +",
-  "18+",
-  "over 21",
-  "after hours 21+",
-  "rave 18+",
-  "adults only",
-  "grown-ups only",
-  "grownups only",
-  "grown ups only",
-  "burlesque",
-  "strip",
-  "erotic",
-  "xxx",
-  "fetish",
-  "gentlemen's club",
-  "gentlemens club",
-  "nude",
-  "sex show",
-  "nightclub",
-  "night club",
-  "bar crawl",
-  "pub crawl",
-  "wine tasting",
-  "beer tasting",
-  "brew fest",
-  "beerfest",
-  "beer fest",
-  "oktoberfest 21+",
-  "cocktail class",
-  "mixology class",
-  "cannabis",
-  "weed",
-  " 420 ",
-];
+export function detectKidAllowed(input: string | null | undefined): boolean | null {
+  if (!input) return null;
+  const text = String(input).toLowerCase();
 
-export function detectFamilyHeuristic(blob: string): boolean | null {
-  const t = (blob || "").toLowerCase();
-  if (!t) return null;
-  for (const bad of EXCLUDE) {
-    if (t.includes(bad)) return false;
+  // --- HARD DISALLOW CUES (win over any "all ages" noise) ---
+  const disallowPatterns: RegExp[] = [
+    /\b(21|twenty[-\s]*one)\s*(\+|and\s*over|and\s*up|or\s*older)\b/,
+    /\b(18|eighteen)\s*(\+|and\s*over|and\s*up|or\s*older)\b/,
+    /\bages?\s*(21|18)\s*\+\b/,
+    /\b(adults?\s*only|grown[-\s]*ups?\s*only|no\s*kids?|no\s*children)\b/,
+    /\bmust\s*be\s*(21|18)\b/,
+    /\bvalid\s*id\s*required\b.*\b(21|18)\b/,
+    /\bbar\s*show\b/,
+  ];
+
+  for (const re of disallowPatterns) {
+    if (re.test(text)) return false;
   }
-  for (const good of WHITELIST) {
-    if (t.includes(good)) return true;
+
+  // --- ALLOW CUES ---
+  const allowPatterns: RegExp[] = [
+    /\bfamily[-\s]*friendly\b/,
+    /\bfamily\s*day|family\s*night|family\s*festival\b/,
+    /\bkids?\b/,                          // "kids", "kid"
+    /\bchildren\b/,
+    /\ball[-\s]*ages\b/,                  // be careful; overridden by disallow above
+    /\btoddler|preschool|elementary|youth|teen(s)?\b/,
+    /\bstory\s*time|storytime\b/,
+    /\bparent[-\s]*child\b/,
+  ];
+  for (const re of allowPatterns) {
+    if (re.test(text)) return true;
   }
+
+  // No strong signal either way
   return null;
-}
-
-// Expanded deny list for regex matching against combined text
-const ADULT_RE = new RegExp(
-  String.raw`(\b(21\+|18\+|over\s*21|after\s*hours\s*21\+|rave\s*18\+|adults?\s*only|grown[- ]?ups?\s*only|burlesque|strip(ping)?|erotic|xxx|fetish|gentlemen'?s\s*club|nude|sex\s*show|night\s*club|nightclub|bar\s*crawl|pub\s*crawl|wine\s*tasting|beer\s*(fest|tasting)|brew\s*fest|beerfest|oktoberfest\s*21\+|cocktail\s*class|mixology\s*class|cannabis|weed|420)\b)`,
-  "i"
-);
-const FAMILY_RE = /(\b(kids?|family|toddler|children|all\s*ages|story\s*time|library|parent|sensory|puppet|zoo|aquarium|park|craft|lego|museum|family[-\s]?friendly)\b)/i;
-
-export function detectKidAllowed(blob: string): boolean | null {
-  const t = (blob || "").toLowerCase();
-  if (!t) return null;
-  if (ADULT_RE.test(t)) return false;
-  // Default to allowed when no deny terms are present
-  return true;
 }

@@ -25,6 +25,7 @@ export default function Filters() {
   const range = searchParams.get("range") || ""; // "today" | "weekend" | "7d" | "all"
   const zip = searchParams.get("zip") || ""; // 5-digit ZIP
   const radius = searchParams.get("radius") || "10"; // miles
+  const kidAllowed = searchParams.get("kid_allowed") || ""; // "true" | "" (any)
 
   const defaultRange = useMemo(() => {
     const d = dayjs();
@@ -39,6 +40,7 @@ export default function Filters() {
   if (io) applied.push({ key: "io", label: io });
   if (radius && radius !== "10") applied.push({ key: "radius", label: `${radius} mi` });
   if (zip) applied.push({ key: "zip", label: `ZIP ${zip}` });
+  if (kidAllowed === "true") applied.push({ key: "kid_allowed", label: "Family-friendly" });
 
   const rootRef = useRef<HTMLElement | null>(null);
 
@@ -82,6 +84,7 @@ export default function Filters() {
         <Chip label="Next 7 Days" active={effectiveRange === "7d"} onClick={() => setParam("range", "7d")} />
         <Chip label="All" active={effectiveRange === "all"} onClick={() => setParam("range", "all")} />
       </div>
+
       <label className="text-sm flex items-center gap-2">
         <span className="text-gray-700 font-medium">ZIP</span>
         <input
@@ -104,6 +107,7 @@ export default function Filters() {
           }}
         />
       </label>
+
       <LabeledSelect
         label="Radius"
         value={radius}
@@ -114,6 +118,7 @@ export default function Filters() {
           { label: "20 mi", value: "20" },
         ]}
       />
+
       <LabeledSelect
         label="Free/Paid"
         value={free}
@@ -124,6 +129,7 @@ export default function Filters() {
           { label: "Paid", value: "paid" },
         ]}
       />
+
       <LabeledSelect
         label="Age band"
         value={age}
@@ -136,6 +142,7 @@ export default function Filters() {
           { label: "Teens", value: "Teens" },
         ]}
       />
+
       <LabeledSelect
         label="Indoor/Outdoor"
         value={io}
@@ -146,6 +153,20 @@ export default function Filters() {
           { label: "Outdoor", value: "Outdoor" },
         ]}
       />
+
+      {/* NEW: Family-friendly filter */}
+      <LabeledSelect
+        label="Family-friendly"
+        value={kidAllowed}
+        onChange={(v) => setParam("kid_allowed", v || null)}
+        options={[
+          { label: "Any", value: "" },
+          { label: "Only show kid-allowed", value: "true" },
+          // If you want an adults-only mode later, uncomment next line and plumb it through your API:
+          // { label: "Hide kid-allowed (adults only)", value: "false" },
+        ]}
+      />
+
       {/* Applied filter chips */}
       {applied.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -163,7 +184,7 @@ export default function Filters() {
           <button
             type="button"
             onClick={() => {
-              ["free", "age", "io", "radius", "zip"].forEach((k) => setParam(k, null));
+              ["free", "age", "io", "radius", "zip", "kid_allowed"].forEach((k) => setParam(k, null));
             }}
             className="ml-1 text-sm text-teal-700 hover:underline"
           >
@@ -171,6 +192,7 @@ export default function Filters() {
           </button>
         </div>
       )}
+
       {/* Soft fade/gradient under the sticky bar to soften edge */}
       <div className="pointer-events-none absolute inset-x-0 -bottom-2 h-3 bg-gradient-to-b from-gray-200/60 to-transparent" />
     </section>
@@ -221,9 +243,7 @@ function Chip({
       onClick={onClick}
       className={
         "inline-flex items-center rounded-full px-3 py-1 text-sm transition-colors " +
-        (active
-          ? "bg-[#14b8a6] text-white"
-          : "bg-gray-100 text-gray-700")
+        (active ? "bg-[#14b8a6] text-white" : "bg-gray-100 text-gray-700")
       }
     >
       {label}
