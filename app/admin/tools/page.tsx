@@ -1,6 +1,8 @@
 import React from "react";
 import { revalidatePath } from "next/cache";
 import BackfillForm from "@/components/admin/BackfillForm";
+import FeedFinderCard from "@/components/admin/FeedFinderCard";
+import { bulkAddIcsFeedsAction, discoverFeedsAction } from "@/app/admin/tools/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +28,7 @@ export default function AdminToolsPage() {
         <h2 className="font-medium mb-2">Backfill kid-allowed</h2>
         <BackfillForm action={runBackfill} />
       </section>
+      <FeedFinderCard discoverAction={discoverFeedsAction} bulkAddAction={bulkAddIcsFeedsAction} />
     </div>
   );
 }

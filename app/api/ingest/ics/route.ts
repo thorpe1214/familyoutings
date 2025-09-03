@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { parseICS } from "@/lib/ics/ingest";
-import { upsertEvents } from "@/lib/db/upsert";
+import { supabaseService } from "@/lib/supabaseService";
+import { mapToEventsRow } from "@/lib/ingest/sanitize";
 import type { NormalizedEvent } from "@/lib/events/normalize";
 
 // Simple in-memory rate limiter: 10 requests/min per IP
@@ -86,8 +87,28 @@ export async function GET(req: Request) {
     const workers = Array.from({ length: Math.min(concurrency, unique.length) }, () => worker());
     await Promise.all(workers);
 
-    // is_family and kid_allowed are sanitized in the ingest mapper
-    const inserted = await upsertEvents(collected);
+    // Per-row upsert using explicit whitelist mapper
+    const sb = supabaseService();
+    let inserted = 0;
+    let logShown = 0;
+    for (const norm of collected) {
+      const src = (norm as any).source || 'ics:localhost';
+      const row = mapToEventsRow(norm, src);
+      if (logShown < 2) {
+        console.log('[ingest upsert]', src, { title: row.title, kid_allowed: row.kid_allowed, is_free: row.is_free });
+        logShown++;
+      }
+      for (const k of ['kid_allowed','family_claim','parent_verified','is_free'] as const) {
+        if (typeof (row as any)[k] !== 'boolean') {
+          throw new Error(`boolean guard: ${k}=${(row as any)[k]} (${typeof (row as any)[k]})`);
+        }
+      }
+      const { error } = await sb
+        .from('events')
+        .upsert(row, { onConflict: 'external_id,source' });
+      if (error) throw error;
+      inserted++;
+    }
     return NextResponse.json(
       { urls: unique.length, parsed: collected.length, inserted, errors },
       { headers: { "Cache-Control": "no-store" } }
@@ -137,8 +158,28 @@ export async function POST(req: Request) {
       }
     }
 
-    // is_family and kid_allowed are already sanitized in the ingest mapper
-    const inserted = await upsertEvents(items as NormalizedEvent[]);
+    // Per-row upsert using explicit whitelist mapper
+    const sb = supabaseService();
+    let inserted = 0;
+    let logShown = 0;
+    for (const norm of items as NormalizedEvent[]) {
+      const src = (norm as any).source || 'ics:localhost';
+      const row = mapToEventsRow(norm, src);
+      if (logShown < 2) {
+        console.log('[ingest upsert]', src, { title: row.title, kid_allowed: row.kid_allowed, is_free: row.is_free });
+        logShown++;
+      }
+      for (const k of ['kid_allowed','family_claim','parent_verified','is_free'] as const) {
+        if (typeof (row as any)[k] !== 'boolean') {
+          throw new Error(`boolean guard: ${k}=${(row as any)[k]} (${typeof (row as any)[k]})`);
+        }
+      }
+      const { error } = await sb
+        .from('events')
+        .upsert(row, { onConflict: 'external_id,source' });
+      if (error) throw error;
+      inserted++;
+    }
     console.log("[/api/ingest/ics]", { feedUrl: normalizedUrl, parsedCount: items.length, upsertedCount: inserted });
     return NextResponse.json({ ok: true, urls: 1, parsed: items.length, inserted, errors: [] }, {
       headers: { "Cache-Control": "no-store" },

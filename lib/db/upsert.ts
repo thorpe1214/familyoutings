@@ -1,5 +1,6 @@
 import { supabaseService } from "@/lib/supabaseService";
 import { slugifyEvent } from "@/lib/slug";
+import { sanitizeForEventsTable, toBool } from "@/lib/ingest/upsertEvent";
 import crypto from "crypto";
 import type { NormalizedEvent } from "@/lib/events/normalize";
 
@@ -18,20 +19,10 @@ async function slugExists(slug: string): Promise<boolean> {
 export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
   if (!events || events.length === 0) return 0;
 
-  // Sanitize fields prior to slugging/upsert
-  // - kid_allowed: only send if it's a boolean; drop otherwise
-  // - is_family: never send to DB (legacy internal heuristic)
-  const sanitized: NormalizedEvent[] = events.map((e) => {
-    const copy: any = { ...e };
-    if (typeof copy.kid_allowed !== "boolean") delete copy.kid_allowed;
-    if ("is_family" in copy) delete copy.is_family;
-    return copy as NormalizedEvent;
-  });
-
   // Ensure slugs
   const seen = new Set<string>();
   const withSlugs: NormalizedEvent[] = [];
-  for (const e of sanitized) {
+  for (const e of events) {
     let slug = e.slug && e.slug.length ? e.slug : slugifyEvent(e.title, e.start_utc, e.city);
     if (!slug) {
       // Fallback to a hash-only slug if absolutely necessary
@@ -61,10 +52,37 @@ export async function upsertEvents(events: NormalizedEvent[]): Promise<number> {
     withSlugs.push({ ...e, slug: candidate });
   }
 
+  // Build explicit rows with coerced types and explicit columns
+  const rows = withSlugs.map((e) => {
+    const base = sanitizeForEventsTable(e);
+    const row: any = { ...base, slug: e.slug };
+    // Guard against stray field named exactly 'family'
+    if ("family" in row) delete row.family;
+    // Optional: boolean type guard before DB write
+    for (const k of ["kid_allowed", "parent_verified", "is_free"]) {
+      if (typeof row[k] !== "boolean") {
+        throw new Error(`boolean guard tripped: ${k}=${row[k]} (${typeof row[k]})`);
+      }
+    }
+    return row;
+  });
+
+  // Log one sample's type info for verification
+  if (rows.length) {
+    const r0: any = rows[0];
+    console.log("[tm upsert sample]", {
+      title: r0.title,
+      kid_allowed: typeof r0.kid_allowed,
+      is_free: typeof r0.is_free,
+      family_claim: typeof r0.family_claim,
+      parent_verified: typeof r0.parent_verified,
+    });
+  }
+
   const sb2 = supabaseService();
   const { data, error } = await sb2
     .from("events")
-    .upsert(withSlugs, { onConflict: "external_id,source" })
+    .upsert(rows, { onConflict: "external_id,source" })
     .select("*");
 
   if (error) throw error;

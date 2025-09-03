@@ -1,238 +1,114 @@
 import { NextResponse } from "next/server";
 import dayjs from "dayjs";
-import { upsertEvents } from "@/lib/db/upsert";
+// Per-row upsert using explicit whitelist mapper
+import { mapToEventsRow } from "@/lib/ingest/sanitize";
 import type { NormalizedEvent } from "@/lib/events/normalize";
 import { supabaseService } from "@/lib/supabaseService";
-import { detectFamilyHeuristic } from "@/lib/heuristics/family";
-const ADULT_RE = /(\b(21\+|18\+|over\s*21|adults?\s*only|burlesque|bar\s*crawl|strip(ping)?|xxx|R-?rated|cocktail|wine\s*tasting|beer\s*(fest|tasting)|night\s*club|gentlemen'?s\s*club)\b)/i;
-const FAMILY_RE = /(\b(kids?|family|toddler|children|all\s*ages|story\s*time|library|parent|sensory|puppet|zoo|aquarium|park|craft|lego|museum|family[-\s]?friendly)\b)/i;
+import { fetchTicketmaster } from "@/lib/sources/ticketmaster";
 
-const TM_BASE = "https://app.ticketmaster.com/discovery/v2/events.json";
-
-// Base32 geohash for Ticketmaster geoPoint
-const GH_ALPHABET = "0123456789bcdefghjkmnpqrstuvwxyz";
-function geohash(lat: number, lon: number, precision = 9): string {
-  const latRange = [-90, 90];
-  const lonRange = [-180, 180];
-  let hash = "";
-  let bits = 0;
-  let value = 0;
-  let even = true;
-  while (hash.length < precision) {
-    if (even) {
-      const mid = (lonRange[0] + lonRange[1]) / 2;
-      if (lon >= mid) {
-        value = (value << 1) + 1;
-        lonRange[0] = mid;
-      } else {
-        value = (value << 1) + 0;
-        lonRange[1] = mid;
-      }
-    } else {
-      const mid = (latRange[0] + latRange[1]) / 2;
-      if (lat >= mid) {
-        value = (value << 1) + 1;
-        latRange[0] = mid;
-      } else {
-        value = (value << 1) + 0;
-        latRange[1] = mid;
-      }
-    }
-    even = !even;
-    bits++;
-    if (bits === 5) {
-      hash += GH_ALPHABET[value];
-      bits = 0;
-      value = 0;
-    }
-  }
-  return hash;
-}
-
-async function fetchWithRetry(url: string, retries = 3, init?: RequestInit): Promise<Response> {
-  let attempt = 0;
-  let lastErr: any;
-  while (attempt <= retries) {
-    const res = await fetch(url, {
-      ...init,
-      headers: { Accept: "application/json", ...(init?.headers || {}) },
-    });
-    if (res.ok) return res;
-    if (res.status === 429 || res.status >= 500) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      const delay = Number.isFinite(retryAfter)
-        ? Math.max(0, retryAfter) * 1000
-        : Math.min(2000 * 2 ** attempt, 10000);
-      await new Promise((r) => setTimeout(r, delay));
-      attempt++;
-      continue;
-    }
-    lastErr = new Error(`HTTP ${res.status}: ${await res.text()}`);
-    break;
-  }
-  throw lastErr || new Error("Request failed");
+function toTmIsoNoMs(d: string) {
+  const iso = new Date(d).toISOString();
+  return iso.replace(/\.\d{3}Z$/, 'Z');
 }
 
 export async function GET(req: Request) {
   try {
-    const apiKey = process.env.TICKETMASTER_API_KEY || process.env.TM_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "TICKETMASTER_API_KEY missing" }, { status: 500 });
-    }
-
     const { searchParams } = new URL(req.url);
-    const city = searchParams.get("city") || undefined;
-    const lat = searchParams.get("lat") ? Number(searchParams.get("lat")) : undefined;
-    const lng = searchParams.get("lng") ? Number(searchParams.get("lng")) : undefined;
-    const radius = searchParams.get("radius") ? Number(searchParams.get("radius")) : 25;
+    const start = searchParams.get("start");
+    const end = searchParams.get("end");
+    const zip = searchParams.get("zip") || undefined;
+    const radiusMi = searchParams.get("radiusMi") ? Number(searchParams.get("radiusMi")) : 25;
+    const dryRun = searchParams.get("dryRun") === "1";
+    const keyword = (searchParams.get("keyword") || undefined)?.trim();
 
-    if (!city && (!Number.isFinite(lat as number) || !Number.isFinite(lng as number))) {
-      return NextResponse.json(
-        { error: "Provide ?city=… or ?lat=…&lng=…&radius=…" },
-        { status: 400 }
-      );
+    if (!start || !end) {
+      return NextResponse.json({ ok: false, error: "start and end are required (ISO UTC)" }, { status: 400 });
     }
 
-    const params = new URLSearchParams({
-      apikey: apiKey,
-      sort: "date,asc",
-      size: "200",
-      page: "0",
-    });
-    if (city) {
-      params.set("city", city);
-    } else if (Number.isFinite(lat as number) && Number.isFinite(lng as number)) {
-      const gh = geohash(lat as number, lng as number, 9);
-      params.set("geoPoint", gh);
-      params.set("radius", String(radius));
-      params.set("unit", "miles");
-    }
+    // Normalize to ISO UTC without milliseconds for Ticketmaster
+    const startIso = toTmIsoNoMs(start);
+    const endIso = toTmIsoNoMs(end);
 
-    // Optional date window
-    const startISO = searchParams.get("startISO");
-    const endISO = searchParams.get("endISO");
-    if (startISO) params.set("startDateTime", dayjs(startISO).toISOString());
-    if (endISO) params.set("endDateTime", dayjs(endISO).toISOString());
-
-    const collected: any[] = [];
-    let page = 0;
-    const MAX_PAGES = 10;
-    while (page < MAX_PAGES) {
-      params.set("page", String(page));
-      const url = `${TM_BASE}?${params.toString()}`;
-      const res = await fetchWithRetry(url, 3);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Ticketmaster ${res.status}: ${text}`);
+    const all = await fetchTicketmaster({ start: startIso, end: endIso, zip, radiusMi, keyword });
+    const totalFetched = all.length;
+    let adultDenied = 0;
+    let noCoords = 0;
+    const keep = all.filter((e) => {
+      if (e.kid_allowed === false) {
+        adultDenied++;
+        return false;
       }
-      const json = await res.json();
-      const events = json?._embedded?.events ?? [];
-      collected.push(...events);
-      const pageInfo = json?.page;
-      if (!pageInfo || pageInfo.number >= pageInfo.totalPages - 1) break;
-      page++;
+      const hasCoords = e.lat != null && e.lon != null;
+      if (!hasCoords) {
+        noCoords++;
+        return false;
+      }
+      return true;
+    });
+    const skipped = adultDenied + noCoords;
+
+    if (dryRun) {
+      // Return a lightweight preview without writing to DB
+      const preview = all.slice(0, 10).map((e) => {
+        let skipReason: string | undefined;
+        if (e.kid_allowed === false) skipReason = "adult_denied";
+        else if (e.lat == null || e.lon == null) skipReason = "no_coords";
+        return {
+          title: e.title,
+          start_utc: e.start_utc,
+          venue_name: e.venue_name,
+          tags: e.tags || [],
+          kidAllowed: e.kid_allowed !== false,
+          ...(skipReason ? { skipReason } : {}),
+        };
+      });
+      return NextResponse.json({ ok: true, totalFetched, skipped, skipReasons: { adult_denied: adultDenied, no_coords: noCoords }, preview });
     }
-
-    // Map to NormalizedEvent and de-dupe
-    const mapCategories = (ev: any): string[] => {
-      const cl = Array.isArray(ev?.classifications) ? ev.classifications[0] : undefined;
-      const names = [
-        cl?.segment?.name,
-        cl?.genre?.name,
-        cl?.subGenre?.name,
-      ].filter(Boolean);
-      return names as string[];
-    };
-
-    const byId = new Map<string, NormalizedEvent>();
-    for (const ev of collected) {
-      const id: string = ev?.id ?? "";
-      if (!id) continue;
-      const venue = ev?._embedded?.venues?.[0];
-      const name: string = ev?.name ?? "Untitled";
-      const start = ev?.dates?.start?.dateTime
-        ? dayjs(ev.dates.start.dateTime).toISOString()
-        : "";
-      const end = ev?.dates?.end?.dateTime
-        ? dayjs(ev.dates.end.dateTime).toISOString()
-        : "";
-      const cityName = venue?.city?.name ?? "";
-      const state = venue?.state?.stateCode ?? "";
-      const addressLine = venue?.address?.line1 ?? "";
-      const postal = venue?.postalCode ?? "";
-      const address = addressLine && (cityName || state || postal)
-        ? `${addressLine}, ${cityName} ${state} ${postal}`.trim()
-        : addressLine;
-      const latStr = venue?.location?.latitude;
-      const lonStr = venue?.location?.longitude;
-
-      const e: NormalizedEvent = {
-        source: "ticketmaster",
-        external_id: id,
-        title: name,
-        description:
-          ev?.info ||
-          ev?.pleaseNote ||
-          ev?.description ||
-          venue?.generalInfo?.generalRule ||
-          venue?.generalInfo?.childRule ||
-          venue?.boxOfficeInfo?.openHoursDetail ||
-          "",
-        start_utc: start,
-        end_utc: end,
-        venue_name: venue?.name ?? "",
-        address,
-        city: cityName,
-        state,
-        lat: latStr ? Number(latStr) : null,
-        lon: lonStr ? Number(lonStr) : null,
-        is_free: false,
-        price_min: 0,
-        price_max: 0,
-        currency: "",
-        age_band: "All Ages",
-        indoor_outdoor: "Mixed",
-        family_claim: "family",
-        parent_verified: false,
-        source_url: ev?.url ?? "",
-        image_url: ev?.images?.[0]?.url ?? "",
-        tags: mapCategories(ev),
-      };
-      const extra = [
-        ev?.pleaseNote,
-        ev?.info,
-        ev?.description,
-        ev?.ageRestrictions?.legalAgeEnforced,
-        venue?.generalInfo?.generalRule,
-        venue?.generalInfo?.childRule,
-        venue?.boxOfficeInfo?.openHoursDetail,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const blob = `${e.title} ${e.description} ${extra} ${(e.tags || []).join(" ")}`.toLowerCase();
-      e.kid_allowed = ADULT_RE.test(blob) ? false : FAMILY_RE.test(blob) ? true : null;
-      if (e.start_utc) byId.set(id, e);
-    }
-
-    const items = Array.from(byId.values());
-    const externalIds = items.map((x) => x.external_id);
 
     // Determine inserted vs updated by checking existing rows
+    const externalIds = keep.map((x) => x.external_id);
     const sb = supabaseService();
-    const { data: existing, error: existErr } = await sb
-      .from("events")
-      .select("external_id")
-      .eq("source", "ticketmaster")
-      .in("external_id", externalIds);
-    if (existErr) throw existErr;
-    const existingSet = new Set((existing ?? []).map((r: any) => r.external_id));
-    const insertedIds = externalIds.filter((id) => !existingSet.has(id));
-    const updatedIds = externalIds.filter((id) => existingSet.has(id));
+    let inserted = 0;
+    let updated = 0;
+    if (externalIds.length) {
+      const { data: existing, error: existErr } = await sb
+        .from("events")
+        .select("external_id")
+        .eq("source", "ticketmaster")
+        .in("external_id", externalIds);
+      if (existErr) throw existErr;
+      const existingSet = new Set((existing ?? []).map((r: any) => r.external_id));
+      inserted = externalIds.filter((id) => !existingSet.has(id)).length;
+      updated = externalIds.filter((id) => existingSet.has(id)).length;
+    }
 
-    const upserted = await upsertEvents(items);
-    return NextResponse.json({ inserted: insertedIds.length, updated: updatedIds.length, errors: [] });
+    // Per-row upsert with strict boolean guard and minimal logging
+    let logShown = 0;
+    for (const norm of keep) {
+      const row = mapToEventsRow(norm, 'ticketmaster');
+      if (logShown < 2) {
+        console.log('[ingest upsert]', 'ticketmaster', { title: row.title, kid_allowed: row.kid_allowed, is_free: row.is_free });
+        logShown++;
+      }
+      for (const k of ['kid_allowed','family_claim','parent_verified','is_free'] as const) {
+        if (typeof (row as any)[k] !== 'boolean') {
+          throw new Error(`boolean guard: ${k}=${(row as any)[k]} (${typeof (row as any)[k]})`);
+        }
+      }
+      const { error } = await sb
+        .from('events')
+        .upsert(row, { onConflict: 'external_id,source' });
+      if (error) {
+        console.error('[tm upsert error]', error, { title: row.title });
+        throw error;
+      }
+    }
+
+    const result = { ok: true, inserted, updated, skipped, totalFetched, skipReasons: { adult_denied: adultDenied, no_coords: noCoords } };
+    console.log("[ingest/ticketmaster]", result);
+    return NextResponse.json(result);
   } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 }
 
@@ -259,13 +135,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "days must be between 1 and 60" }, { status: 400 });
     }
 
-    const startISO = dayjs().toISOString();
-    const endISO = dayjs().add(days, "day").toISOString();
+    // Normalize to ISO UTC without milliseconds for Ticketmaster
+    const startISO = toTmIsoNoMs(dayjs().toISOString());
+    const endISO = toTmIsoNoMs(dayjs().add(days, "day").toISOString());
 
     const params = new URLSearchParams({
       apikey: apiKey,
       postalCode,
       radius: String(radius),
+      unit: "miles",
       startDateTime: startISO,
       endDateTime: endISO,
       size: "200",
@@ -416,7 +294,6 @@ export async function POST(req: Request) {
         currency: price.currency ?? "",
         age_band: "All Ages",
         indoor_outdoor: "Mixed",
-        family_claim: "family",
         parent_verified: false,
         source_url: ev?.url ?? "",
         image_url: ev?.images?.[0]?.url ?? "",
@@ -425,7 +302,27 @@ export async function POST(req: Request) {
       } as NormalizedEvent);
     }
 
-    const upserted = await upsertEvents(normalized);
+    // Per-row upsert with strict guard + minimal logging
+    let logShown = 0;
+    const sb2 = supabaseService();
+    let upserted = 0;
+    for (const norm of normalized) {
+      const row = mapToEventsRow(norm, 'ticketmaster');
+      if (logShown < 2) {
+        console.log('[ingest upsert]', 'ticketmaster', { title: row.title, kid_allowed: row.kid_allowed, is_free: row.is_free });
+        logShown++;
+      }
+      for (const k of ['kid_allowed','family_claim','parent_verified','is_free'] as const) {
+        if (typeof (row as any)[k] !== 'boolean') {
+          throw new Error(`boolean guard: ${k}=${(row as any)[k]} (${typeof (row as any)[k]})`);
+        }
+      }
+      const { error } = await sb2
+        .from('events')
+        .upsert(row, { onConflict: 'external_id,source' });
+      if (error) throw error;
+      upserted++;
+    }
     return NextResponse.json({ ok: true, totalFetched, upserted });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });

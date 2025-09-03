@@ -1,0 +1,21 @@
+name: Ticketmaster Nightly Ingest
+
+on:
+  schedule:
+    # Runs every day at 08:15 UTC (1:15am PT / 4:15am ET)
+    - cron: "15 8 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST batch ingest (rolling 30d, radius 50)
+        run: |
+          curl -s -X POST \
+            -H "x-admin-token: ${{ secrets.BACKFILL_ADMIN_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"radiusMi":50}' \
+            "${{ secrets.PRODUCTION_URL }}/api/admin/ingest/ticketmaster/batch" \
+          | jq '.zipsProcessed, .totals'
+
