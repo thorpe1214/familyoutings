@@ -1,40 +1,31 @@
-import React from "react";
-
-type Props = {
-  size?: number;
-  className?: string;
-};
-
-// Minimal location pin with a family trio inside
-export default function LogoMark({ size = 28, className }: Props) {
+export default function LogoMark({ className = "h-6 w-6" }: { className?: string }) {
   return (
     <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
+      viewBox="0 0 32 32"
       className={className}
       aria-hidden="true"
+      fill="none"
     >
-      {/* Pin outline uses currentColor so it follows surrounding text color */}
+      {/* Pin */}
       <path
-        d="M12 2c-3.866 0-7 3.134-7 7 0 4.418 7 13 7 13s7-8.582 7-13c0-3.866-3.134-7-7-7z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        d="M16 29c6-6.5 9-11 9-15a9 9 0 1 0-18 0c0 4 3 8.5 9 15z"
+        fill="#14B8A6"
+        opacity="0.15"
       />
-      {/* Family circles (parents + child) */}
-      <circle cx="8.2" cy="9.2" r="1.8" fill="#14b8a6" />
-      <circle cx="15.8" cy="9.2" r="1.8" fill="#14b8a6" />
-      <circle cx="12" cy="9.8" r="1.3" fill="#14b8a6" />
-      {/* Simple arc to suggest shoulders under the circles */}
       <path
-        d="M7.2 13c1.7-1.2 3.6-1.8 4.8-1.8s3.1.6 4.8 1.8v1.1c-1.7-1.2-3.6-1.8-4.8-1.8s-3.1.6-4.8 1.8V13z"
-        fill="#14b8a6"
+        d="M16 29c6-6.5 9-11 9-15a9 9 0 1 0-18 0c0 4 3 8.5 9 15z"
+        stroke="#14B8A6"
+        strokeWidth="1.5"
+      />
+      {/* Family (two heads + shoulders, centered) */}
+      <circle cx="12.25" cy="13.25" r="1.75" fill="#0F766E" />
+      <circle cx="19.75" cy="13.25" r="1.75" fill="#0F766E" />
+      <path
+        d="M10.5 18.5c1.2-1.4 2.8-2.1 5.5-2.1s4.3.7 5.5 2.1"
+        stroke="#0F766E"
+        strokeWidth="1.6"
+        strokeLinecap="round"
       />
     </svg>
   );
 }
-

@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import dayjs from "dayjs";
 
 export default function Filters() {
   const searchParams = useSearchParams();
@@ -19,155 +18,116 @@ export default function Filters() {
     [searchParams, pathname, replace]
   );
 
-  const free = searchParams.get("free") || ""; // "free" | "paid" | ""
-  const age = searchParams.get("age") || ""; // "All Ages" | "0–5" | "6–12" | "Teens" | ""
-  const io = searchParams.get("io") || ""; // "Indoor" | "Outdoor" | ""
-  const range = searchParams.get("range") || ""; // "today" | "weekend" | "7d" | "all"
-  const zip = searchParams.get("zip") || ""; // 5-digit ZIP
-  const radius = searchParams.get("radius") || "10"; // miles
-  const kidAllowed = searchParams.get("kid_allowed") || ""; // "true" | "" (any)
+  const zip = searchParams.get("zip") || "";
+  const city = searchParams.get("city") || "";
+  const radius = searchParams.get("radius") || "5";
+  const free = searchParams.get("free") || "";
+  const io = searchParams.get("io") || "";
+  const range = searchParams.get("range") || "";
 
-  const defaultRange = useMemo(() => {
-    const d = dayjs();
-    const dow = d.day(); // 0=Sun, 4=Thu
-    return dow === 4 || dow === 5 || dow === 6 || dow === 0 ? "weekend" : "7d";
-  }, []);
-  const effectiveRange = range || defaultRange;
-
-  const applied: { key: string; label: string }[] = [];
-  if (free) applied.push({ key: "free", label: free === "free" ? "Free" : "Paid" });
-  if (age) applied.push({ key: "age", label: `Age: ${age}` });
-  if (io) applied.push({ key: "io", label: io });
-  if (radius && radius !== "10") applied.push({ key: "radius", label: `${radius} mi` });
-  if (zip) applied.push({ key: "zip", label: `ZIP ${zip}` });
-  if (kidAllowed === "true") applied.push({ key: "kid_allowed", label: "Family-friendly" });
-
-  const rootRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    let t: any = null;
-    const last = { h: 0 };
-    const set = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height);
-      if (h !== last.h) {
-        last.h = h;
-        document.documentElement.style.setProperty("--filters-offset", `${h}px`);
-      }
-    };
-    const schedule = () => {
-      if (t) clearTimeout(t);
-      t = setTimeout(set, 120);
-    };
-    set();
-    const RZ = (window as any).ResizeObserver;
-    const ro = RZ ? new RZ(() => schedule()) : null;
-    ro?.observe(el);
-    window.addEventListener("resize", schedule);
-    return () => {
-      if (t) clearTimeout(t);
-      ro?.disconnect?.();
-      window.removeEventListener("resize", schedule);
-    };
-  }, []);
+  // Build applied chips
+  const applied = useMemo(() => {
+    const a: { key: string; label: string }[] = [];
+    if (city) a.push({ key: "city", label: city });
+    if (zip) a.push({ key: "zip", label: `ZIP ${zip}` });
+    if (radius && radius !== "5") a.push({ key: "radius", label: `${radius} mi` });
+    if (free) a.push({ key: "free", label: free === "free" ? "Free" : "Paid" });
+    if (io) a.push({ key: "io", label: io });
+    if (range) a.push({ key: "range", label: range });
+    return a;
+  }, [city, zip, radius, free, io, range]);
 
   return (
     <section
-      ref={rootRef as any}
-      className="sticky top-0 z-20 w-full flex flex-col gap-2 backdrop-blur bg-white/80 border-b border-gray-200 p-3 mb-4 relative"
+      className="sticky top-[60px] z-30 w-full flex flex-col gap-2
+                 backdrop-blur bg-white/85 border-b border-gray-200 p-3 mb-4"
     >
+      {/* Row 1: date chips (unchanged) */}
       <div className="flex items-center gap-2 w-full">
         <span className="text-sm text-gray-700 font-medium">Date:</span>
-        <Chip label="Today" active={effectiveRange === "today"} onClick={() => setParam("range", "today")} />
-        <Chip label="This Weekend" active={effectiveRange === "weekend"} onClick={() => setParam("range", "weekend")} />
-        <Chip label="Next 7 Days" active={effectiveRange === "7d"} onClick={() => setParam("range", "7d")} />
-        <Chip label="All" active={effectiveRange === "all"} onClick={() => setParam("range", "all")} />
+        <Chip label="Today"   active={range === "today"}   onClick={() => setParam("range", "today")} />
+        <Chip label="This Weekend" active={range === "weekend"} onClick={() => setParam("range", "weekend")} />
+        <Chip label="Next 7 Days"  active={range === "7d"}     onClick={() => setParam("range", "7d")} />
+        <Chip label="All"     active={range === "all"}     onClick={() => setParam("range", "all")} />
       </div>
 
-      <label className="text-sm flex items-center gap-2">
-        <span className="text-gray-700 font-medium">ZIP</span>
-        <input
-          inputMode="numeric"
-          pattern="[0-9]*"
-          maxLength={5}
-          placeholder="ZIP code"
-          className="border rounded px-2 py-1 bg-white w-24"
-          defaultValue={zip}
-          onChange={(e) => {
-            const digits = e.target.value.replace(/\D+/g, "").slice(0, 5);
-            e.target.value = digits;
-            if (digits.length === 5) setParam("zip", digits);
-            if (digits.length === 0) setParam("zip", null);
-          }}
-          onBlur={(e) => {
-            const digits = e.target.value.replace(/\D+/g, "").slice(0, 5);
-            if (digits.length === 5) setParam("zip", digits);
-            else if (digits.length === 0) setParam("zip", null);
-          }}
+      {/* City/ZIP input (as you had) */}
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm flex items-center gap-2">
+          <span className="text-gray-700 font-medium">City/ZIP</span>
+          <input
+            id="cityzip"
+            placeholder='e.g. "Portland, OR" or 97207'
+            className="border rounded px-2 py-1 bg-white w-[260px]"
+            defaultValue={city || zip}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const v = (e.target as HTMLInputElement).value.trim();
+              if (!v) {
+                setParam("city", null);
+                setParam("zip", null);
+                return;
+              }
+              const zipM = v.match(/^\d{5}$/);
+              if (zipM) {
+                setParam("zip", zipM[0]);
+                setParam("city", null);
+              } else {
+                setParam("city", v);
+                setParam("zip", null);
+              }
+            }}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (!v) {
+                setParam("city", null);
+                setParam("zip", null);
+                return;
+              }
+              const zipM = v.match(/^\d{5}$/);
+              if (zipM) {
+                setParam("zip", zipM[0]);
+                setParam("city", null);
+              } else {
+                setParam("city", v);
+                setParam("zip", null);
+              }
+            }}
+          />
+        </label>
+
+        <LabeledSelect
+          label="Radius"
+          value={radius}
+          onChange={(v) => setParam("radius", v || null)}
+          options={[
+            { label: "5 mi", value: "5" },
+            { label: "10 mi", value: "10" },
+            { label: "20 mi", value: "20" },
+          ]}
         />
-      </label>
+        <LabeledSelect
+          label="Free/Paid"
+          value={free}
+          onChange={(v) => setParam("free", v || null)}
+          options={[
+            { label: "Any", value: "" },
+            { label: "Free", value: "free" },
+            { label: "Paid", value: "paid" },
+          ]}
+        />
+        <LabeledSelect
+          label="Indoor/Outdoor"
+          value={io}
+          onChange={(v) => setParam("io", v || null)}
+          options={[
+            { label: "Any", value: "" },
+            { label: "Indoor", value: "Indoor" },
+            { label: "Outdoor", value: "Outdoor" },
+          ]}
+        />
+      </div>
 
-      <LabeledSelect
-        label="Radius"
-        value={radius}
-        onChange={(v) => setParam("radius", v || null)}
-        options={[
-          { label: "5 mi", value: "5" },
-          { label: "10 mi", value: "10" },
-          { label: "20 mi", value: "20" },
-        ]}
-      />
-
-      <LabeledSelect
-        label="Free/Paid"
-        value={free}
-        onChange={(v) => setParam("free", v || null)}
-        options={[
-          { label: "Any", value: "" },
-          { label: "Free", value: "free" },
-          { label: "Paid", value: "paid" },
-        ]}
-      />
-
-      <LabeledSelect
-        label="Age band"
-        value={age}
-        onChange={(v) => setParam("age", v || null)}
-        options={[
-          { label: "Any", value: "" },
-          { label: "All Ages", value: "All Ages" },
-          { label: "0–5", value: "0–5" },
-          { label: "6–12", value: "6–12" },
-          { label: "Teens", value: "Teens" },
-        ]}
-      />
-
-      <LabeledSelect
-        label="Indoor/Outdoor"
-        value={io}
-        onChange={(v) => setParam("io", v || null)}
-        options={[
-          { label: "Any", value: "" },
-          { label: "Indoor", value: "Indoor" },
-          { label: "Outdoor", value: "Outdoor" },
-        ]}
-      />
-
-      {/* NEW: Family-friendly filter */}
-      <LabeledSelect
-        label="Family-friendly"
-        value={kidAllowed}
-        onChange={(v) => setParam("kid_allowed", v || null)}
-        options={[
-          { label: "Any", value: "" },
-          { label: "Only show kid-allowed", value: "true" },
-          // If you want an adults-only mode later, uncomment next line and plumb it through your API:
-          // { label: "Hide kid-allowed (adults only)", value: "false" },
-        ]}
-      />
-
-      {/* Applied filter chips */}
       {applied.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {applied.map((a) => (
@@ -183,18 +143,13 @@ export default function Filters() {
           ))}
           <button
             type="button"
-            onClick={() => {
-              ["free", "age", "io", "radius", "zip", "kid_allowed"].forEach((k) => setParam(k, null));
-            }}
+            onClick={() => ["free", "io", "radius", "zip", "city", "range"].forEach((k) => setParam(k, null))}
             className="ml-1 text-sm text-teal-700 hover:underline"
           >
             Clear all
           </button>
         </div>
       )}
-
-      {/* Soft fade/gradient under the sticky bar to soften edge */}
-      <div className="pointer-events-none absolute inset-x-0 -bottom-2 h-3 bg-gradient-to-b from-gray-200/60 to-transparent" />
     </section>
   );
 }

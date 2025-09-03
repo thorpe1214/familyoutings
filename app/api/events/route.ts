@@ -1,8 +1,8 @@
-// app/api/events/route.ts
 import { NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
+
 dayjs.extend(utc);
 
 export const runtime = "nodejs";
@@ -11,90 +11,95 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
 
-    // filters
-    const kidAllowedParam = url.searchParams.get("kid_allowed"); // "true" | "false" | null
-    const free = url.searchParams.get("free") || "";             // "" | "free" | "paid"
-    const age = url.searchParams.get("age") || "";               // "All Ages" | "0–5" | "6–12" | "Teens" | ""
-    const io = url.searchParams.get("io") || "";                 // "" | "Indoor" | "Outdoor"
-    const sort = url.searchParams.get("sort") || "start_asc";    // "start_asc" | "start_desc"
-    const range = url.searchParams.get("range") || "";           // "today" | "weekend" | "7d" | "all"
+    // -------- query params --------
+    const limitParam = url.searchParams.get("limit");
+    const cursorStart = url.searchParams.get("cursorStart") || undefined;
+    const cursorId = url.searchParams.get("cursorId") || undefined;
+
+    const range = url.searchParams.get("range") || ""; // today | weekend | 7d | all
     const startISO = url.searchParams.get("startISO") || "";
     const endISO = url.searchParams.get("endISO") || "";
 
-    const limitParam = url.searchParams.get("limit");
-    const cursorStart = url.searchParams.get("cursorStart");
-    const cursorId = url.searchParams.get("cursorId");
+    const free = url.searchParams.get("free") || ""; // "" | "free" | "paid"
+    const age = url.searchParams.get("age") || "";   // "" | "All Ages" | "0–5" | ...
+    const io  = url.searchParams.get("io")  || "";   // "" | "Indoor" | "Outdoor"
+    const sort = (url.searchParams.get("sort") as "start_asc" | "start_desc") || "start_asc";
 
-    // pagination size
+    // Optional override for debugging:
+    // kid_allowed=true  -> only true
+    // kid_allowed=false -> only false
+    // (default: exclude only false, include NULL/TRUE)
+    const kidAllowedParam = url.searchParams.get("kid_allowed");
+
+    // -------- paging --------
     let limit = Number(limitParam ?? 20);
     if (!Number.isFinite(limit) || limit <= 0) limit = 20;
     if (limit > 100) limit = 100;
 
     const sb = supabaseService();
 
-    // ----- DATE WINDOW -----
-    let start = startISO;
-    let end = endISO;
+    // -------- dates --------
+    const now = dayjs.utc();
+    let startFilter: string | null = null;
+    let endFilter: string | null = null;
 
-    // compute start/end for common ranges if not given
-    if (!start || !end) {
-      const now = dayjs().utc();
+    if (startISO || endISO) {
+      if (startISO) startFilter = dayjs.utc(startISO).toISOString();
+      if (endISO) endFilter = dayjs.utc(endISO).toISOString();
+    } else {
       if (range === "today") {
-        start = now.startOf("day").toISOString();
-        end = now.endOf("day").toISOString();
+        startFilter = now.startOf("day").toISOString();
+        endFilter = now.endOf("day").toISOString();
       } else if (range === "weekend") {
-        // Fri 00:00 → Sun 23:59 (UTC)
-        const dow = now.day();
-        const fri = now.add(((5 - dow + 7) % 7), "day").startOf("day");
-        const sun = fri.add(2, "day").endOf("day");
-        start = fri.toISOString();
-        end = sun.toISOString();
+        // Next Saturday/Sunday in UTC
+        const wd = now.day(); // 0=Sun ... 6=Sat
+        const sat = now.add((6 - wd + 7) % 7, "day").startOf("day");
+        const sun = sat.add(1, "day").endOf("day");
+        startFilter = sat.toISOString();
+        endFilter = sun.toISOString();
       } else if (range === "7d") {
-        start = now.startOf("day").toISOString();
-        end = now.add(7, "day").endOf("day").toISOString();
-      } else if (range === "all") {
-        // no date filter
+        startFilter = now.startOf("day").toISOString();
+        endFilter = now.add(7, "day").endOf("day").toISOString();
       } else {
-        // default: next 7 days
-        start = now.startOf("day").toISOString();
-        end = now.add(7, "day").endOf("day").toISOString();
+        // "all" -> no date filter
       }
     }
 
+    // -------- base query --------
     let query = sb.from("events").select("*").order("start_utc", { ascending: sort === "start_asc" });
 
-    // Only family-friendly by default:
-    // If caller doesn't specify kid_allowed, force true.
-    if (kidAllowedParam === "true") query = query.eq("kid_allowed", true);
-    else if (kidAllowedParam === "false") query = query.eq("kid_allowed", false);
-    else query = query.eq("kid_allowed", true);
+    // Kid-friendly logic (default: include TRUE or NULL; exclude only FALSE)
+    if (kidAllowedParam === "true") {
+      query = query.eq("kid_allowed", true);
+    } else if (kidAllowedParam === "false") {
+      query = query.eq("kid_allowed", false);
+    } else {
+      // include true or null
+      query = query.or("kid_allowed.is.null,kid_allowed.eq.true");
+    }
 
-    // free/paid
+    // Dates
+    if (startFilter) query = query.gte("start_utc", startFilter);
+    if (endFilter)   query = query.lt("start_utc", endFilter);
+
+    // Simple cursor (works with ascending & descending)
+    if (cursorStart && cursorId) {
+      if (sort === "start_asc") {
+        query = query.or(`start_utc.gt.${cursorStart},and(start_utc.eq.${cursorStart},id.gt.${cursorId})`);
+      } else {
+        query = query.or(`start_utc.lt.${cursorStart},and(start_utc.eq.${cursorStart},id.lt.${cursorId})`);
+      }
+    }
+
+    // Other filters
     if (free === "free") query = query.eq("is_free", true);
     if (free === "paid") query = query.eq("is_free", false);
 
-    // age band
     if (age) query = query.eq("age_band", age);
+    if (io === "Indoor")  query = query.eq("indoor_outdoor", "Indoor");
+    if (io === "Outdoor") query = query.eq("indoor_outdoor", "Outdoor");
 
-    // indoor/outdoor
-    if (io) query = query.eq("indoor_outdoor", io);
-
-    // date window
-    if (start && end) {
-      query = query.gte("start_utc", start).lte("start_utc", end);
-    }
-
-    // cursor
-    if (cursorStart && cursorId) {
-      // strictly after the last tuple
-      query = query.or(
-        sort === "start_asc"
-          ? `and(start_utc.gt.${cursorStart}),and(start_utc.eq.${cursorStart},id.gt.${cursorId})`
-          : `and(start_utc.lt.${cursorStart}),and(start_utc.eq.${cursorStart},id.lt.${cursorId})`
-      );
-    }
-
-    // window
+    // Window
     query = query.range(0, limit - 1);
 
     const { data: rows, error } = await query;
@@ -102,7 +107,7 @@ export async function GET(req: Request) {
 
     const items = rows ?? [];
 
-    // build next cursor
+    // next cursor
     let nextCursor: { cursorStart: string; cursorId: string } | null = null;
     if (items.length === limit) {
       const last = items[items.length - 1];
@@ -111,7 +116,7 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({ items, count: items.length, nextCursor });
+    return NextResponse.json({ items, nextCursor });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
