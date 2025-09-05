@@ -1,5 +1,8 @@
+"use client";
 import Link from "next/link";
 import type { ClientEvent } from "@/lib/hooks/useEvents";
+import WeatherChipClient from "@/components/WeatherChipClient";
+import DescriptionSnippetClient from "@/components/DescriptionSnippetClient";
 
 type Props = {
   e?: ClientEvent;
@@ -32,10 +35,24 @@ function pickEnd(e: any): string | undefined {
 }
 
 // "Tue, Sep 2 • 5:00 PM–7:30 PM" (or spans multiple days cleanly)
+function isAllDay(startISO?: string, endISO?: string) {
+  if (!startISO || !endISO) return false;
+  const s = new Date(startISO);
+  const e = new Date(endISO);
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return false;
+  const startsAtMidnight = s.getUTCHours() === 0 && s.getUTCMinutes() === 0;
+  const endsAtMidnight = e.getUTCHours() === 0 && e.getUTCMinutes() === 0;
+  const dur = Math.abs(e.getTime() - s.getTime());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const approxOneDay = dur >= dayMs - 60_000 && dur <= dayMs + 60_000;
+  return startsAtMidnight && endsAtMidnight && approxOneDay;
+}
+
 function formatWhen(startISO?: string, endISO?: string) {
   if (!startISO) return "";
   const start = new Date(startISO);
   if (isNaN(start.getTime())) return "";
+  if (isAllDay(startISO, endISO)) return "All day";
 
   const dateFmt = new Intl.DateTimeFormat(undefined, {
     weekday: "short",
@@ -107,6 +124,17 @@ export default function EventCard(props: Props) {
         </div>
       )}
 
+      {/* 1–2 line description preview (graceful if empty).
+          Prefer client-side snippet: up to 140 chars from event.description (strip HTML).
+          If none available, use the date/time line as a fallback.
+          We still keep lazy server fetch as a last resort without removing existing code. */}
+      <DescriptionSnippetClient
+        eventId={String(ev.id)}
+        className="text-sm text-gray-700 mb-3"
+        // If we have a description on the object, provide it; otherwise, show date/time.
+        fallback={(ev as any)?.description ? String((ev as any).description) : (when || null)}
+      />
+
       {chips.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-3">
           {chips.map((c) => (
@@ -117,6 +145,13 @@ export default function EventCard(props: Props) {
               {c}
             </span>
           ))}
+          {/* Weather chip: lazy client fetch; hide on failure or if out-of-range */}
+          <WeatherChipClient
+            eventId={String(ev.id)}
+            lat={ev.lat as number | undefined}
+            lon={ev.lon as number | undefined}
+            startsAt={pickStart(ev)}
+          />
         </div>
       )}
 

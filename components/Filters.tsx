@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import CityZipAutocomplete from "./CityZipAutocomplete";
+import RadiusSlider from "@/components/RadiusSlider";
 
 export default function Filters() {
   const searchParams = useSearchParams();
@@ -21,6 +23,7 @@ export default function Filters() {
   const zip = searchParams.get("zip") || "";
   const city = searchParams.get("city") || "";
   const radius = searchParams.get("radius") || ""; // deprecated (dynamic radius)
+  const radiusMi = searchParams.get("radiusMi") || ""; // new slider-controlled radius
   const free = searchParams.get("free") || "";
   const io = ""; // deprecated UI filter
   const range = searchParams.get("range") || "";
@@ -55,46 +58,12 @@ export default function Filters() {
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm flex items-center gap-2">
           <span className="text-gray-700 font-medium">City/ZIP</span>
-          <input
-            id="cityzip"
-            placeholder='e.g. "Portland, OR" or 97207'
-            className="border rounded px-2 py-1 bg-white w-[260px]"
-            defaultValue={city || zip}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              const v = (e.target as HTMLInputElement).value.trim();
-              if (!v) {
-                setParam("city", null);
-                setParam("zip", null);
-                return;
-              }
-              const zipM = v.match(/^\d{5}$/);
-              if (zipM) {
-                setParam("zip", zipM[0]);
-                setParam("city", null);
-              } else {
-                setParam("city", v);
-                setParam("zip", null);
-              }
-            }}
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              if (!v) {
-                setParam("city", null);
-                setParam("zip", null);
-                return;
-              }
-              const zipM = v.match(/^\d{5}$/);
-              if (zipM) {
-                setParam("zip", zipM[0]);
-                setParam("city", null);
-              } else {
-                setParam("city", v);
-                setParam("zip", null);
-              }
-            }}
-          />
+          {/* Replaced bare input with an accessible, debounced autocomplete */}
+          <CityZipAutocomplete />
         </label>
+
+        {/* Radius slider (1–50 mi). Value persists in ?radiusMi=; server respects it exactly. */}
+        <RadiusSlider />
 
         <LabeledSelect
           label="Free/Paid"

@@ -4,6 +4,7 @@ import type { NormalizedEvent } from "@/lib/events/normalize";
 import { sanitizeEvent } from "@/lib/events/normalize";
 import { detectFamilyHeuristic, detectKidAllowed } from "@/lib/heuristics/family";
 import { supabaseService } from "@/lib/supabaseService";
+import { geocodeNominatim } from "@/lib/search/geocodeNominatim";
 
 // Ensure we only ever assign true/false into boolean columns.
 function toBooleanStrict(v: unknown): boolean | undefined {
@@ -83,7 +84,7 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
       : "";
     const loc = ev.location || "";
 
-    // Do not geocode here; leave lat/lon null to avoid per-row network calls.
+    // Build normalized event. We will opportunistically geocode below if we have location info.
     const item: NormalizedEvent = sanitizeEvent({
       source: `ics:${host}`,
       external_id: ev.uid || `${title}-${start}`,
@@ -112,6 +113,30 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
     // Only compute and set kid_allowed; do not persist legacy is_family
     const kidAllowed = detectKidAllowed(blob);
     if (kidAllowed !== null) item.kid_allowed = kidAllowed;
+    // Ingest-time geocoding:
+    // If we have no lat/lon but do have a usable address string, try Nominatim.
+    // Uses our geocodes cache table under the hood (rate-limited to ~1 rps globally).
+    try {
+      const hasCoords = typeof item.lat === 'number' && typeof item.lon === 'number';
+      const address = (item.address || '').trim();
+      const venue = (item.venue_name || '').trim();
+      const looksPoBox = /\bP\.?O\.?\s*Box\b/i.test(address);
+      // Prefer full address when present and not a PO Box; else fall back to venue name.
+      const query = (!hasCoords && address && !looksPoBox)
+        ? address
+        : (!hasCoords && venue ? venue : '');
+      if (query) {
+        const gc = await geocodeNominatim(query);
+        if (gc && Number.isFinite(gc.lat) && Number.isFinite(gc.lon)) {
+          (item as any).lat = gc.lat;
+          (item as any).lon = gc.lon;
+          // geom will be set by DB trigger on write
+        }
+      }
+    } catch {
+      // Swallow geocoding issues here; backfill route will retry.
+    }
+
     out.push(item);
   }
   return out;
