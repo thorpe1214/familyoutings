@@ -7,6 +7,59 @@ dayjs.extend(utc);
 
 export const runtime = "nodejs";
 
+// ----- Holiday placeholder filter (drop all-day, ICS-style holidays) -----
+const HOLIDAY_TITLES = new Set([
+  "new year's day",
+  "ml king day",
+  "martin luther king jr. day",
+  "martin luther king day",
+  "presidents' day",
+  "good friday",
+  "memorial day",
+  "juneteenth",
+  "independence day",
+  "labor day",
+  "columbus day",
+  "indigenous peoples' day",
+  "veterans day",
+  "thanksgiving",
+  "thanksgiving day",
+  "christmas",
+  "christmas day",
+]);
+
+function looksLikeHolidayTitle(title?: string) {
+  if (!title) return false;
+  return HOLIDAY_TITLES.has(title.toLowerCase().trim());
+}
+
+// Heuristic: treat as all-day if it starts at 00:00 and ends at 00:00 the next day (± a minute),
+// or if the duration is ~24h and starts at midnight. Works with UTC timestamps.
+function isAllDayWindow(startUtc?: string, endUtc?: string) {
+  if (!startUtc || !endUtc) return false;
+  const s = dayjs.utc(startUtc);
+  const e = dayjs.utc(endUtc);
+  if (!s.isValid() || !e.isValid()) return false;
+
+  const startsAtMidnight = s.hour() === 0 && s.minute() === 0;
+  const endsAtMidnight = e.hour() === 0 && e.minute() === 0;
+
+  const durMs = Math.abs(e.valueOf() - s.valueOf());
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  // allow small variances around exactly 24h to accommodate feed quirks
+  const approxOneDay = durMs >= dayMs - 60_000 && durMs <= dayMs + 60_000;
+
+  return startsAtMidnight && endsAtMidnight && approxOneDay;
+}
+
+// If your schema lacks end_utc, we still drop by title alone.
+function isHolidayPlaceholder(ev: any) {
+  const byTitle = looksLikeHolidayTitle(ev?.title);
+  const byAllDay = isAllDayWindow(ev?.start_utc, ev?.end_utc);
+  return byTitle && (byAllDay || !ev?.end_utc); // if no end_utc, title alone is enough
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -20,9 +73,9 @@ export async function GET(req: Request) {
     const startISO = url.searchParams.get("startISO") || "";
     const endISO = url.searchParams.get("endISO") || "";
 
-    const free = url.searchParams.get("free") || ""; // "" | "free" | "paid"
-    const age = url.searchParams.get("age") || "";   // "" | "All Ages" | "0–5" | ...
-    const io  = url.searchParams.get("io")  || "";   // "" | "Indoor" | "Outdoor"
+    const free = url.searchParams.get("free") || "";   // "" | "free" | "paid"
+    const age = ""; // deprecated: age filtering removed
+    const io  = ""; // deprecated: indoor/outdoor filtering removed
     const sort = (url.searchParams.get("sort") as "start_asc" | "start_desc") || "start_asc";
 
     // Optional override for debugging:
@@ -68,15 +121,8 @@ export async function GET(req: Request) {
     // -------- base query --------
     let query = sb.from("events").select("*").order("start_utc", { ascending: sort === "start_asc" });
 
-    // Kid-friendly logic (default: include TRUE or NULL; exclude only FALSE)
-    if (kidAllowedParam === "true") {
-      query = query.eq("kid_allowed", true);
-    } else if (kidAllowedParam === "false") {
-      query = query.eq("kid_allowed", false);
-    } else {
-      // include true or null
-      query = query.or("kid_allowed.is.null,kid_allowed.eq.true");
-    }
+    // Kid-friendly only
+    query = query.eq("kid_allowed", true);
 
     // Dates
     if (startFilter) query = query.gte("start_utc", startFilter);
@@ -95,9 +141,7 @@ export async function GET(req: Request) {
     if (free === "free") query = query.eq("is_free", true);
     if (free === "paid") query = query.eq("is_free", false);
 
-    if (age) query = query.eq("age_band", age);
-    if (io === "Indoor")  query = query.eq("indoor_outdoor", "Indoor");
-    if (io === "Outdoor") query = query.eq("indoor_outdoor", "Outdoor");
+    // Age/Indoor filters intentionally ignored (labels remain read-only on UI)
 
     // Window
     query = query.range(0, limit - 1);
@@ -105,16 +149,23 @@ export async function GET(req: Request) {
     const { data: rows, error } = await query;
     if (error) throw error;
 
-    const items = rows ?? [];
+    // ---- Remove ICS "holiday placeholders" (what you saw in the screenshot) ----
+    const items = (rows ?? []).filter((ev) => !isHolidayPlaceholder(ev));
 
-    // next cursor
+    // next cursor (based on filtered list)
     let nextCursor: { cursorStart: string; cursorId: string } | null = null;
     if (items.length === limit) {
-      const last = items[items.length - 1];
+      const last = items[items.length - 1] as any;
       if (last?.start_utc && last?.id) {
-        nextCursor = { cursorStart: last.start_utc, cursorId: last.id };
+        nextCursor = { cursorStart: last.start_utc, cursorId: String(last.id) };
       }
     }
+
+    // (Optional) dev log:
+    // if (process.env.NODE_ENV !== "production") {
+    //   const dropped = (rows?.length ?? 0) - items.length;
+    //   if (dropped > 0) console.log(`[api/events] filtered holiday placeholders: ${dropped}`);
+    // }
 
     return NextResponse.json({ items, nextCursor });
   } catch (e: any) {

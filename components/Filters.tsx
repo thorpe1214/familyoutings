@@ -20,9 +20,9 @@ export default function Filters() {
 
   const zip = searchParams.get("zip") || "";
   const city = searchParams.get("city") || "";
-  const radius = searchParams.get("radius") || "5";
+  const radius = searchParams.get("radius") || ""; // deprecated (dynamic radius)
   const free = searchParams.get("free") || "";
-  const io = searchParams.get("io") || "";
+  const io = ""; // deprecated UI filter
   const range = searchParams.get("range") || "";
 
   // Build applied chips
@@ -30,7 +30,7 @@ export default function Filters() {
     const a: { key: string; label: string }[] = [];
     if (city) a.push({ key: "city", label: city });
     if (zip) a.push({ key: "zip", label: `ZIP ${zip}` });
-    if (radius && radius !== "5") a.push({ key: "radius", label: `${radius} mi` });
+    // radius no longer user-controlled
     if (free) a.push({ key: "free", label: free === "free" ? "Free" : "Paid" });
     if (io) a.push({ key: "io", label: io });
     if (range) a.push({ key: "range", label: range });
@@ -51,7 +51,7 @@ export default function Filters() {
         <Chip label="All"     active={range === "all"}     onClick={() => setParam("range", "all")} />
       </div>
 
-      {/* City/ZIP input (as you had) */}
+      {/* Single search box: City, ST or ZIP */}
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm flex items-center gap-2">
           <span className="text-gray-700 font-medium">City/ZIP</span>
@@ -97,16 +97,6 @@ export default function Filters() {
         </label>
 
         <LabeledSelect
-          label="Radius"
-          value={radius}
-          onChange={(v) => setParam("radius", v || null)}
-          options={[
-            { label: "5 mi", value: "5" },
-            { label: "10 mi", value: "10" },
-            { label: "20 mi", value: "20" },
-          ]}
-        />
-        <LabeledSelect
           label="Free/Paid"
           value={free}
           onChange={(v) => setParam("free", v || null)}
@@ -116,16 +106,7 @@ export default function Filters() {
             { label: "Paid", value: "paid" },
           ]}
         />
-        <LabeledSelect
-          label="Indoor/Outdoor"
-          value={io}
-          onChange={(v) => setParam("io", v || null)}
-          options={[
-            { label: "Any", value: "" },
-            { label: "Indoor", value: "Indoor" },
-            { label: "Outdoor", value: "Outdoor" },
-          ]}
-        />
+        {/* Indoor/Outdoor filter hidden (read-only labels remain on cards) */}
       </div>
 
       {applied.length > 0 && (
@@ -143,7 +124,7 @@ export default function Filters() {
           ))}
           <button
             type="button"
-            onClick={() => ["free", "io", "radius", "zip", "city", "range"].forEach((k) => setParam(k, null))}
+            onClick={() => ["free", "zip", "city", "range"].forEach((k) => setParam(k, null))}
             className="ml-1 text-sm text-teal-700 hover:underline"
           >
             Clear all

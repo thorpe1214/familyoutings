@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseService } from "@/lib/supabaseService";
 import { parseICS } from "@/lib/ics/ingest";
-import { mapToEventsRow } from "@/lib/ingest/sanitize";
 import type { NormalizedEvent } from "@/lib/events/normalize";
+import { isGenericHoliday, hasLocality, withinWindow, slugifyLabel, ICS_WINDOW_DAYS } from "@/lib/ics/guards";
+import { upsertEvents } from "@/lib/db/upsert";
 
 // Simple in-memory rate limiter: 10 requests/min per IP
 type Bucket = { count: number; resetAt: number };
@@ -14,7 +15,6 @@ globalAny.__ICS_ALL_RATE_MAP__ = rateMap;
 
 function getClientIp(req: Request): string {
   try {
-    const runStarted = Date.now();
     const fwd = req.headers.get("x-forwarded-for");
     if (fwd) return fwd.split(",")[0].trim();
   } catch {}
@@ -60,28 +60,33 @@ function parseStatusFromError(e: any): number | null {
 }
 
 async function ingestSingleIcs(
-  url: string,
-  opts: { dryRun: boolean; defaultCity?: string | null; defaultState?: string | null }
-): Promise<{ totalFetched: number; inserted: number; updated: number; skipped: number }> {
+  feed: { url: string; label: string; city?: string | null; state?: string | null },
+  opts: { dryRun: boolean }
+): Promise<{ totalFetched: number; inserted: number; updated: number; skipped: number; errors: Array<{ external_id?: string; title?: string; error: string }> }> {
+  const url = feed.url;
+  const labelSlug = slugifyLabel(feed.label || (new URL(url).hostname));
   const items = await parseICS(url);
-  if (opts.defaultCity || opts.defaultState) {
-    for (const it of items) {
-      if (opts.defaultCity) (it as any).city = opts.defaultCity as any;
-      if (opts.defaultState) (it as any).state = opts.defaultState as any;
+
+  const kept: NormalizedEvent[] = [];
+  const errors: Array<{ external_id?: string; title?: string; error: string }> = [];
+  for (const it of items) {
+    try {
+      if (isGenericHoliday(it.title)) { errors.push({ external_id: it.external_id, title: it.title, error: "generic_holiday" }); continue; }
+      if (!withinWindow(it.start_utc, ICS_WINDOW_DAYS)) { errors.push({ external_id: it.external_id, title: it.title, error: "outside_window" }); continue; }
+      if (!hasLocality(it, { feedCity: feed.city, feedState: feed.state })) { errors.push({ external_id: it.external_id, title: it.title, error: "no_locality" }); continue; }
+      const tags = Array.from(new Set(["ics", labelSlug, ...(it.tags || [])]));
+      kept.push({ ...it, tags, city: it.city || (feed.city ?? ""), state: it.state || (feed.state ?? "") });
+    } catch (e: any) {
+      errors.push({ external_id: it.external_id, title: it.title, error: String(e?.message || e) });
     }
   }
 
+  if (kept.length > 1000) kept.length = 1000;
+
   const sb = supabaseService();
-  // Determine existing IDs for accurate inserted vs updated counts
-  const sourceHost = (() => {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "ics";
-    }
-  })();
-  const source = `ics:${sourceHost}`;
-  const externalIds = items.map((it) => String((it as any).external_id));
+  const host = new URL(url).hostname;
+  const source = `ics:${host}`;
+  const externalIds = kept.map((e) => e.external_id);
   let existingSet = new Set<string>();
   if (externalIds.length) {
     const { data: existing, error } = await sb
@@ -95,31 +100,15 @@ async function ingestSingleIcs(
   const insertedCount = externalIds.filter((id) => !existingSet.has(id)).length;
   const updatedCount = externalIds.filter((id) => existingSet.has(id)).length;
 
-  if (!opts.dryRun && items.length) {
-    let logShown = 0;
-    for (const norm of items) {
-      const src = (norm as any).source || source;
-      const row = mapToEventsRow(norm, src);
-      if (logShown < 1) {
-        console.log('[ingest upsert]', src, { title: row.title, kid_allowed: row.kid_allowed, is_free: row.is_free });
-        logShown++;
-      }
-      for (const k of ["kid_allowed", "family_claim", "parent_verified", "is_free"] as const) {
-        if (typeof (row as any)[k] !== "boolean") {
-          throw new Error(`boolean guard: ${k}=${(row as any)[k]} (${typeof (row as any)[k]})`);
-        }
-      }
-      const { error } = await sb
-        .from("events")
-        .upsert(row, { onConflict: "external_id,source" });
-      if (error) throw error;
-    }
+  if (!opts.dryRun && kept.length) {
+    await upsertEvents(kept);
   }
 
-  return { totalFetched: items.length, inserted: insertedCount, updated: updatedCount, skipped: 0 };
+  return { totalFetched: items.length, inserted: insertedCount, updated: updatedCount, skipped: items.length - kept.length, errors };
 }
 
 async function processAll(request: Request) {
+  const runStarted = Date.now();
   // Rate limit
   const ip = getClientIp(request);
   const rl = checkRateLimit(ip);
@@ -140,10 +129,12 @@ async function processAll(request: Request) {
     const supabase = supabaseService();
     const { data: feeds, error } = await supabase
       .from("ics_feeds")
-      .select("url, city, state")
+      .select("url, city, state, label")
       .eq("active", true);
     if (error) throw error;
-    const feedList = (feeds || []).filter((f: any) => typeof f?.url === "string" && f.url.length > 0) as Array<{ url: string; city?: string | null; state?: string | null }>;
+    const feedList = (feeds || [])
+      .filter((f: any) => typeof f?.url === "string" && f.url.length > 0)
+      .map((f: any) => ({ url: f.url, city: f.city ?? null, state: f.state ?? null, label: f.label || (new URL(f.url).hostname) })) as Array<{ url: string; city?: string | null; state?: string | null; label: string }>;
 
     const perFeed: Array<{ url: string; fetched: number; inserted: number; updated: number; skipped: number; durationMs: number; retries: number; error?: string | null }> = [];
     let totalFetched = 0;
@@ -157,12 +148,12 @@ async function processAll(request: Request) {
       let tries = 0;
       let done = false;
       let lastErr: any = null;
-      let result: { totalFetched: number; inserted: number; updated: number; skipped: number } | null = null;
+      let result: { totalFetched: number; inserted: number; updated: number; skipped: number; errors: any[] } | null = null;
 
       while (!done && tries < 3) {
         tries++;
         try {
-          result = await ingestSingleIcs(feed.url, { dryRun, defaultCity: feed.city ?? undefined, defaultState: feed.state ?? undefined });
+          result = await ingestSingleIcs({ url: feed.url, label: feed.label, city: feed.city, state: feed.state }, { dryRun });
           done = true;
         } catch (err: any) {
           lastErr = err;

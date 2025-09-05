@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import { useEventsInfinite } from "@/lib/hooks/useEventsInfinite";
+import { useSearchInfinite } from "@/lib/hooks/useSearchInfinite";
 import EventCard from "@/components/EventCard";
 import SkeletonEventCard from "@/components/SkeletonEventCard";
 import { labelForZip } from "@/lib/geo/cityZip";
@@ -13,9 +13,8 @@ export default function EventsFeedClient() {
   // read filters from URL
   const range = search.get("range") || undefined;
   const free = (search.get("free") as "" | "free" | "paid") || "";
-  const io = (search.get("io") as "" | "Indoor" | "Outdoor") || "";
   const zip = search.get("zip") || "";
-  const radiusMiles = Number(search.get("radius") || "10");
+  const city = search.get("city") || "";
 
   const sort = (search.get("sort") as "start_asc" | "start_desc") || "start_asc";
   const startISO = search.get("startISO") || undefined;
@@ -24,16 +23,12 @@ export default function EventsFeedClient() {
   // nice location label for the header
   const locationLabel = useMemo(() => labelForZip(zip), [zip]);
 
-  const { items, loading, error, hasMore, loadMore } = useEventsInfinite({
-    range,
-    free,
-    io,
-    sort,
-    pageSize: 30,
-    zip: zip || undefined,
-    radiusMiles: Number.isFinite(radiusMiles) ? radiusMiles : 10,
+  const query = city || zip || "";
+  const { items, loading, error, hasMore, loadMore, notice } = useSearchInfinite({
+    query,
     startISO,
     endISO,
+    pageSize: 30,
   });
 
   // infinite scroll sentinel
@@ -59,6 +54,13 @@ export default function EventsFeedClient() {
         <div className="text-sm text-gray-600 mb-3">
           Showing <span className="font-medium">kid-friendly</span> events near{" "}
           <span className="font-medium">{locationLabel}</span>.
+        </div>
+      )}
+
+      {/* Radius expansion notice */}
+      {notice && (
+        <div className="p-2 mb-3 rounded border border-gray-200 bg-gray-50 text-gray-700 text-xs">
+          {notice}
         </div>
       )}
 
@@ -89,8 +91,8 @@ export default function EventsFeedClient() {
           <div className="font-medium mb-1">No kid-friendly events found for this view.</div>
           <ul className="list-disc ml-5 space-y-1">
             <li>Try a different date (Today / Weekend / Next 7 Days) or choose <em>All</em>.</li>
-            <li>Increase your radius (e.g., 20 mi).</li>
-            <li>Clear filters like Free/Paid or Indoor/Outdoor.</li>
+            <li>Try a different city or ZIP.</li>
+            <li>Widen your date range.</li>
             {zip && <li>Check a nearby city or another ZIP.</li>}
           </ul>
         </div>

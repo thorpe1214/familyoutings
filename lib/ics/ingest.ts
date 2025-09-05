@@ -28,40 +28,8 @@ type IcsEvent = {
   uid?: string;
 };
 
-async function geocodeCached(key: string): Promise<{ lat: number; lon: number } | null> {
-  if (!key.trim()) return null;
-  const sb = supabaseService();
-  const { data: hit } = await sb
-    .from("venue_cache")
-    .select("*")
-    .eq("key", key)
-    .maybeSingle();
-  if (hit?.lat && hit?.lon) return { lat: hit.lat, lon: hit.lon };
-
-  const u = new URL("https://nominatim.openstreetmap.org/search");
-  u.searchParams.set("q", key);
-  u.searchParams.set("format", "jsonv2");
-  u.searchParams.set("limit", "1");
-
-  const res = await fetch(u.toString(), {
-    headers: {
-      "User-Agent": "FamilyOutings/1.0 (contact: hello@familyoutings.example)",
-      Accept: "application/json",
-    },
-  });
-  if (!res.ok) return null;
-  const arr = await res.json();
-  const first = Array.isArray(arr) && (arr as any)[0];
-  if (first?.lat && first?.lon) {
-    await sb.from("venue_cache").upsert({
-      key,
-      lat: Number(first.lat),
-      lon: Number(first.lon),
-    });
-    return { lat: Number(first.lat), lon: Number(first.lon) };
-  }
-  return null;
-}
+// Note: avoid per-row geocoding to keep ingest fast and deterministic.
+// If needed later, we can add an offline cache warm-up step.
 
 function inferAgeBand(text: string): "0–5" | "6–12" | "13–17" | "All Ages" {
   const t = text.toLowerCase();
@@ -115,7 +83,7 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
       : "";
     const loc = ev.location || "";
 
-    const geo = await geocodeCached(loc);
+    // Do not geocode here; leave lat/lon null to avoid per-row network calls.
     const item: NormalizedEvent = sanitizeEvent({
       source: `ics:${host}`,
       external_id: ev.uid || `${title}-${start}`,
@@ -127,8 +95,8 @@ export async function parseICS(url: string): Promise<NormalizedEvent[]> {
       address: loc,
       city: "",
       state: "",
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
+      lat: null,
+      lon: null,
       is_free: true,
       price_min: 0,
       price_max: 0,

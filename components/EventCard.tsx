@@ -85,13 +85,19 @@ export default function EventCard(props: Props) {
   const chips: string[] = [];
   if (ev.is_free === true) chips.push("Free");
   if (ev.is_free === false) chips.push("Paid");
+  if (typeof ev.distance_mi === 'number' && Number.isFinite(ev.distance_mi)) {
+    const miles = Math.round(ev.distance_mi * 10) / 10;
+    chips.push(`~${miles} mi`);
+  }
   if (ev.indoor_outdoor) chips.push(ev.indoor_outdoor);
   if (ev.age_band) chips.push(ev.age_band);
 
   return (
     <article className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-5">
       <h3 className="text-lg md:text-xl font-semibold text-slate-900 tracking-tight mb-1">
-        {title}
+        <Link href={`/events/${ev.id}`} className="hover:underline">
+          {title}
+        </Link>
       </h3>
 
       {(when || where) && (
