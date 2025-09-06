@@ -73,9 +73,32 @@ export default function EventsFeedClient() {
 
       {/* List */}
       <div className="flex flex-col gap-4">
-        {items.map((ev) => (
-          <EventCard key={ev.id} event={ev} />
-        ))}
+        {/* Compute simple grouping for repeated occurrences: same title+venue in the future */}
+        {(() => {
+          const now = Date.now();
+          const norm = (s: string) => s.trim().toLowerCase();
+          const keyFor = (ev: any) => `${norm(ev.title || '')}|${norm(ev.venue || ev.venue_name || '')}`;
+          const future = items.filter((ev) => {
+            const t = Date.parse((ev as any).start_utc || ev.start);
+            return Number.isFinite(t) && t >= now;
+          });
+          const counts = new Map<string, number>();
+          future.forEach((ev) => {
+            const k = keyFor(ev);
+            counts.set(k, (counts.get(k) || 0) + 1);
+          });
+
+          // Optional filter: show only items matching a selected groupKey
+          const selectedKey = search.get('groupKey') || '';
+          const list = selectedKey ? items.filter((ev) => keyFor(ev) === selectedKey) : items;
+
+          return list.map((ev) => {
+            const k = keyFor(ev);
+            const total = counts.get(k) || 0;
+            const extra = Math.max(0, total - 1); // N more beyond this card
+            return <EventCard key={ev.id} event={ev} moreCount={extra} groupKey={k} />;
+          });
+        })()}
         {loading && items.length === 0 && (
           <>
             <SkeletonEventCard />

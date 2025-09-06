@@ -2,8 +2,9 @@
 
 // Client-side weather chip for event list rows.
 // - Lazy-loads only when visible (IntersectionObserver)
-// - Fetches Open-Meteo directly from the browser; hides chip on failure
-// - Shows temp + icon when the event is within forecast window; otherwise hidden
+// - Calls our /api/weather endpoint; minimal text: "72°F • 15%"; '—' if unknown
+// - Only fetches when within the next ~14 days and coords exist
+// - Avoid layout churn by rendering a stable chip even while loading
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -12,7 +13,7 @@ function withinForecastRange(startISO?: string | null): boolean {
   const now = new Date();
   const start = new Date(startISO);
   const diffDays = (start.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-  return diffDays >= -1 && diffDays <= 16;
+  return diffDays >= 0 && diffDays <= 14; // extend to ~2 weeks
 }
 
 function iconFor(code: number): string {
@@ -39,6 +40,7 @@ export default function WeatherChipClient({
   const ref = useRef<HTMLSpanElement | null>(null);
   const [visible, setVisible] = useState(false);
   const [text, setText] = useState<string | null>(null);
+  const show = Boolean(lat && lon && startsAt && withinForecastRange(startsAt));
 
   useEffect(() => {
     if (!ref.current) return;
@@ -59,47 +61,52 @@ export default function WeatherChipClient({
   useEffect(() => {
     async function run() {
       try {
-        if (!visible) return;
-        if (!lat || !lon || !startsAt) return; // no chip
-        if (!withinForecastRange(startsAt)) return; // out of range
-
-        const d = new Date(startsAt);
-        const day = d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
-        const url = new URL('https://api.open-meteo.com/v1/forecast');
-        url.searchParams.set('latitude', String(lat));
-        url.searchParams.set('longitude', String(lon));
-        url.searchParams.set('hourly', 'temperature_2m,precipitation_probability,weathercode');
-        url.searchParams.set('timezone', 'UTC');
-        url.searchParams.set('start_date', day);
-        url.searchParams.set('end_date', day);
-        const res = await fetch(url.toString());
-        if (!res.ok) return;
-        const payload = await res.json();
-        if (!payload?.hourly?.time) return;
-        const targetISO = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours())).toISOString();
-        const idx = payload.hourly.time.findIndex((t: string) => t === targetISO);
-        if (idx < 0) return;
-        const c = Number(payload.hourly.temperature_2m?.[idx] ?? NaN);
-        const p = Number(payload.hourly.precipitation_probability?.[idx] ?? NaN);
-        const w = Number(payload.hourly.weathercode?.[idx] ?? NaN);
-        if (!Number.isFinite(c)) return;
-        const f = Math.round(c * 9/5 + 32);
-        const dt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric' }).format(new Date(targetISO));
-        const icon = iconFor(Number.isFinite(w) ? w : 0);
-        const precip = Number.isFinite(p) ? Math.round(p) : 0;
-        setText(`${icon} ${dt} • ${f}° • ${precip}% rain`);
+        if (!visible || !show) return;
+        // Heuristic: if event looks all-day (UTC midnight), query midday to be more representative
+        const d = new Date(String(startsAt));
+        const looksAllDay = d.getUTCHours() === 0 && d.getUTCMinutes() === 0;
+        const atISO = looksAllDay ? new Date(d.getTime() + 12 * 60 * 60 * 1000).toISOString() : String(startsAt);
+        const q = new URLSearchParams();
+        q.set('lat', String(lat));
+        q.set('lon', String(lon));
+        q.set('at', atISO);
+        const res = await fetch(`/api/weather?${q.toString()}`, { cache: 'force-cache' });
+        const json = await res.json().catch(() => null);
+        const w = json?.weather;
+        if (!json?.ok || !w) { setText('—'); return; }
+        const temp = typeof w.tempF === 'number' ? w.tempF : null;
+        const precip = typeof w.precipPct === 'number' ? w.precipPct : null;
+        const emoji = pickEmoji(temp, precip);
+        if (temp === null || precip === null) { setText('—'); return; }
+        setText(`${emoji} ${Math.round(temp)}°F • ${Math.round(precip)}%`);
       } catch {
-        // Hide on failure
+        setText('—');
       }
     }
     run();
-  }, [visible, lat, lon, startsAt]);
+  }, [visible, show, lat, lon, startsAt]);
 
-  if (!text) return <span ref={ref} />;
+  // Always render a stable chip so rows don't jump around.
+  if (!show)
+    return <span ref={ref} className="inline-flex items-center text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">—</span>;
+
+  // Render a stable chip (placeholder '—' while loading) to avoid layout shift.
   return (
-    <span ref={ref} className="inline-flex items-center gap-2 text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">
-      {text}
+    <span
+      ref={ref}
+      className="inline-flex items-center text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800"
+      aria-label={text && text !== '—' ? `Forecast ${text}` : 'Forecast unavailable'}
+    >
+      {text || '—'}
     </span>
   );
 }
 
+function pickEmoji(tempF: number | null, precipPct: number | null): string {
+  const p = typeof precipPct === 'number' ? precipPct : null;
+  const t = typeof tempF === 'number' ? tempF : null;
+  if (p !== null && p >= 40) return '🌧️';
+  if (t !== null && t >= 75) return '☀️';
+  if (t !== null) return '☁️';
+  return '🌡️';
+}

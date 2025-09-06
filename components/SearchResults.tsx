@@ -54,6 +54,7 @@ export default function SearchResults() {
   // - Keep this near the header for instant visibility.
   const nEvents = useMemo(() => items.filter(i => i.type === 'event').length, [items]);
   const nPlaces = useMemo(() => items.filter(i => i.type === 'place').length, [items]);
+  const nTotal = items.length;
 
   const filtered = useMemo(() => {
     // Tiny safeguard: never exclude by distance; 0 is valid.
@@ -125,7 +126,7 @@ export default function SearchResults() {
       )}
 
       {/* Type filter chips (include counts for quick visibility) */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         {(["all", "event", "place"] as Filter[]).map((t) => (
           <button
             key={t}
@@ -136,7 +137,7 @@ export default function SearchResults() {
             }`}
           >
             {/* Labels retain accessibility and existing styles; only text changes */}
-            {t === "all" ? "All" : t === "event" ? `Events (${nEvents})` : `Places (${nPlaces})`}
+            {t === "all" ? `All (${nTotal})` : t === "event" ? `Events (${nEvents})` : `Places (${nPlaces})`}
           </button>
         ))}
       </div>

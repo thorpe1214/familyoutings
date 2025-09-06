@@ -98,18 +98,23 @@ export default async function Home({ searchParams }: PageProps) {
       {headerLocation && (
         <h1 className="text-lg font-semibold text-gray-900">FamilyOutings — {headerLocation}</h1>
       )}
-      <div className="relative">
-        <Filters />
-        {/* Inline refresh form near ZIP/radius controls */}
-        <div className="absolute right-3 top-3">
-          <RefreshIngestButton
-            action={refreshEvents}
-            zip={zipParam}
-            radius={radiusParam || "25"}
-            days="14"
-          />
+      {/* Sticky filters bar with subtle backdrop */}
+      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-b">
+        <div className="relative p-3">
+          <Filters />
+          {/* Inline refresh form near ZIP/radius controls */}
+          <div className="absolute right-3 top-3">
+            <RefreshIngestButton
+              action={refreshEvents}
+              zip={zipParam}
+              radius={radiusParam || "25"}
+              days="14"
+            />
+          </div>
         </div>
       </div>
+      {/* Small top padding so content doesn’t sit under the sticky bar during scroll */}
+      <div className="pt-2" />
       {zipInfo ? (
         emptyState.isEmpty ? (
           <div className="mt-4 rounded border border-gray-200 bg-white p-4">

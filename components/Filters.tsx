@@ -41,12 +41,9 @@ export default function Filters() {
   }, [city, zip, radius, free, io, range]);
 
   return (
-    <section
-      className="sticky top-[60px] z-30 w-full flex flex-col gap-2
-                 backdrop-blur bg-white/85 border-b border-gray-200 p-3 mb-4"
-    >
+    <section className="w-full flex flex-col gap-2">
       {/* Row 1: date chips (unchanged) */}
-      <div className="flex items-center gap-2 w-full">
+      <div className="flex flex-wrap items-center gap-2 w-full">
         <span className="text-sm text-gray-700 font-medium">Date:</span>
         <Chip label="Today"   active={range === "today"}   onClick={() => setParam("range", "today")} />
         <Chip label="This Weekend" active={range === "weekend"} onClick={() => setParam("range", "weekend")} />
