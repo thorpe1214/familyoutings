@@ -25,19 +25,24 @@ type Params = {
   endISO?: string | null;
   pageSize?: number;
   radiusMi?: number | null; // when provided, pass through to API (no auto-expand)
+  // Optional date range chip. When present, forwarded as ?range= today|weekend|7d|all
+  // so the server can compute the time window if explicit dates are not set.
+  range?: string | null;
 };
 
 // Lightweight infinite loader for /api/search normalized results.
 // Keeps the envelope fields: nextCursor, notice, warning.
-export function useUnifiedSearch({ query, startISO, endISO, pageSize = 30, radiusMi }: Params) {
+export function useUnifiedSearch({ query, startISO, endISO, pageSize = 30, radiusMi, range }: Params) {
   const baseQS = useMemo(() => {
     const q = new URLSearchParams();
     q.set("query", query);
     if (startISO) q.set("start", startISO);
     if (endISO) q.set("end", endISO);
+    // Forward range when present (the server ignores it if start/end are explicit)
+    if (range) q.set("range", range);
     if (typeof radiusMi === 'number' && Number.isFinite(radiusMi)) q.set("radiusMi", String(radiusMi));
     return q.toString();
-  }, [query, startISO, endISO, radiusMi]);
+  }, [query, startISO, endISO, radiusMi, range]);
 
   const [items, setItems] = useState<UnifiedItem[]>([]);
   const [loading, setLoading] = useState(false);

@@ -99,10 +99,13 @@ export async function GET(req: Request) {
     let placesErr: string | null = null;
 
     // Auto-expand loop (disabled when explicit radiusMi is present)
+    let eventsPath: 'rpc_ok' | 'rpc_retry' | 'fallback_sql' | null = null; // for debug logging of which branch we used
     while (true) {
       const radiusM = milesToMeters(radiusMi);
+      // EVENTS: call RPC first, retry on 42883 or signature mismatch, then fallback to SQL-style query if still failing.
       if (includeParam !== 'places') {
-        const { data, error } = await sb.rpc('search_events_geo', {
+        // Standard argument names matching the latest SQL signature in migrations.
+        const rpcArgsStd = {
           p_lat: geocode.lat,
           p_lon: geocode.lon,
           p_radius_m: radiusM,
@@ -112,12 +115,106 @@ export async function GET(req: Request) {
           p_after_id: cursor ? Number(cursor.id) : null,
           p_limit: limit,
           p_bbox: geocode.bbox,
-        });
-        if (error) {
-          eventsErr = error.message || 'events_rpc_error';
-          items = [];
+        } as const;
+        // Alternate ordering seen in older deployments. Names are the same but some stacks were sensitive to arg order.
+        // Keeping the keys explicit to document the intended alternate signature.
+        const rpcArgsAlt = {
+          p_bbox: geocode.bbox,
+          p_lat: geocode.lat,
+          p_lon: geocode.lon,
+          p_radius_m: radiusM,
+          p_start: startTs,
+          p_end: endTs,
+          p_limit: limit,
+          p_after_id: cursor ? Number(cursor.id) : null,
+          p_after_start: cursor?.start ?? null,
+        } as const;
+
+        // Helper: perform RPC and classify error for retry decision
+        async function runEventsRpc(args: Record<string, any>) {
+          const { data, error } = await sb.rpc('search_events_geo', args as any);
+          return { data: Array.isArray(data) ? data : [], error };
+        }
+
+        // Try standard signature first
+        let rpcRes = await runEventsRpc(rpcArgsStd);
+        if (rpcRes.error && (rpcRes.error as any).code === '42883' || /function .* does not exist|No function matches/i.test(String(rpcRes.error?.message || ''))) {
+          // Retry with alternate ordering of args
+          const retry = await runEventsRpc(rpcArgsAlt);
+          if (!retry.error) {
+            items = retry.data;
+            eventsPath = 'rpc_retry';
+          } else {
+            // Fall back to SQL-style query
+            eventsErr = retry.error.message || 'events_rpc_error';
+          }
+        } else if (rpcRes.error) {
+          // Different RPC error; capture and plan for fallback
+          eventsErr = rpcRes.error.message || 'events_rpc_error';
         } else {
-          items = Array.isArray(data) ? data : [];
+          items = rpcRes.data;
+          eventsPath = 'rpc_ok';
+        }
+
+        // Fallback SQL-style search using bounding box + JS distance filter/sort when RPC is not usable
+        if (!eventsPath) {
+          try {
+            const meters = radiusM;
+            // Convert radius (m) to degrees lat/lon (approximate)
+            const dLat = meters / 111320; // ~meters per degree latitude
+            const latRad = (geocode.lat * Math.PI) / 180;
+            const dLon = meters / (111320 * Math.cos(latRad) || 1);
+            const minLat = geocode.lat - dLat;
+            const maxLat = geocode.lat + dLat;
+            const minLon = geocode.lon - dLon;
+            const maxLon = geocode.lon + dLon;
+
+            // Base filters mirror the RPC time window + kid-friendly policy
+            let q = sb
+              .from('events')
+              .select('id,title,start_utc,end_utc,venue_name,address,city,state,lat,lon,is_free,price_min,price_max,age_band,indoor_outdoor,kid_allowed,slug')
+              .not('lat', 'is', null)
+              .not('lon', 'is', null)
+              .or('kid_allowed.is.null,kid_allowed.eq.true')
+              .gte('lat', minLat)
+              .lte('lat', maxLat)
+              .gte('lon', minLon)
+              .lte('lon', maxLon);
+            if (startTs) q = q.gte('start_utc', startTs);
+            if (endTs) q = q.lte('start_utc', endTs);
+            // Use a generous upper bound; we'll filter + sort in memory then cap to limit
+            const { data: rows, error: fErr } = await q.limit(Math.min(limit * 8, 2000));
+            if (fErr) throw new Error(fErr.message || 'events_sql_fallback_error');
+            const within = (rows || []).map((r: any) => {
+              const R = 6371000;
+              const toRad = (d: number) => (d * Math.PI) / 180;
+              const dphi = toRad((r.lat as number) - geocode.lat);
+              const dlambda = toRad((r.lon as number) - geocode.lon);
+              const a = Math.sin(dphi / 2) ** 2 + Math.cos(toRad(geocode.lat)) * Math.cos(toRad(r.lat as number)) * Math.sin(dlambda / 2) ** 2;
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              const dist = R * c; // meters
+              const inEnv = Array.isArray(geocode.bbox)
+                ? (r.lon >= geocode.bbox[0] && r.lon <= geocode.bbox[2] && r.lat >= geocode.bbox[1] && r.lat <= geocode.bbox[3])
+                : false;
+              return { ...r, __distance_m: dist, __in_city_bbox: inEnv };
+            }).filter((r: any) => r.__distance_m <= meters + 0.001);
+            within.sort((a: any, b: any) => {
+              if (a.__in_city_bbox !== b.__in_city_bbox) return a.__in_city_bbox ? -1 : 1;
+              if (a.__distance_m !== b.__distance_m) return a.__distance_m - b.__distance_m;
+              if (a.start_utc !== b.start_utc) return new Date(a.start_utc).getTime() - new Date(b.start_utc).getTime();
+              return Number(a.id) - Number(b.id);
+            });
+            items = within.slice(0, limit).map(({ __distance_m: distance_meters, __in_city_bbox, ...row }: any) => ({
+              ...row,
+              // Normalize to fields expected by the mapping below
+              distance_meters,
+              in_city_bbox: __in_city_bbox,
+            }));
+            eventsPath = 'fallback_sql';
+          } catch (err: any) {
+            eventsErr = String(err?.message || err) || eventsErr;
+            items = [];
+          }
         }
       }
       // For places we fetch with the same used radius (no pagination for now)
@@ -154,13 +251,14 @@ export async function GET(req: Request) {
     // Server-side debug logging, counts only (avoid payloads)
     if (DEBUG) {
       const escalated = !hasExplicitRadius && usedRadius > 20;
-      console.log('[search]', {
+      console.debug('[search]', {
         query: q,
         geocode: { lat: geocode.lat, lon: geocode.lon, bbox: geocode.bbox, place_type: geocode.place_type },
         radiusMi: usedRadius,
         escalated,
         counts: { events: items.length, places: places.length },
         errors: { eventsErr, placesErr },
+        path: { events: (typeof (eventsPath) === 'string' ? eventsPath : undefined) },
       });
     }
 
@@ -254,7 +352,7 @@ export async function GET(req: Request) {
       : (hasExplicitRadius ? `Radius set to ${usedRadius} mi (user-selected)` : `Radius set to ${usedRadius} mi`);
     // Single warning tag for compatibility with spec
     const warning = eventsErr && !placesErr
-      ? 'events_failed'
+      ? (items.length > 0 ? 'events_fallback' : 'events_failed')
       : (placesErr && !eventsErr ? 'places_failed' : undefined);
     const bothFailed = Boolean(eventsErr) && Boolean(placesErr);
     const baseEnvelope = {

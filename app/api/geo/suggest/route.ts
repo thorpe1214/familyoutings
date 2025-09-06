@@ -46,7 +46,7 @@ export async function GET(req: Request) {
 
     // Edge cases: IME / empty / too short — return fast without remote fetch
     if (!qRaw || qRaw.length < 2) {
-      const res = NextResponse.json({ items: [] });
+      const res = NextResponse.json({ ok: true, suggestions: [] });
       res.headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
       return res;
     }
@@ -88,7 +88,8 @@ export async function GET(req: Request) {
     const status = resp.status;
     const text = await resp.text();
     if (!resp.ok) {
-      const body = { ok: false, error: 'upstream_error', status, url: base.toString() };
+      const body = { ok: false, error: 'upstream_error', status } as any;
+      if (debug) body.url = base.toString();
       const r = NextResponse.json(body, { status });
       r.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
       return r;
@@ -100,7 +101,8 @@ export async function GET(req: Request) {
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) json = parsed;
     } catch {
-      const body = { ok: false, error: 'invalid_json', status, url: base.toString() };
+      const body: any = { ok: false, error: 'invalid_json', status };
+      if (debug) body.url = base.toString();
       const r = NextResponse.json(body, { status: 502 });
       r.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
       return r;

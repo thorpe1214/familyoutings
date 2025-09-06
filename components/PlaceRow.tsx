@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { describePlace } from "@/lib/ui/describePlace";
+import { describePlace } from "@/lib/describePlace";
 
 type Props = {
   id: string;
@@ -18,9 +18,10 @@ export default function PlaceRow({ id, title, category, subcategory, subtitle, d
   const miles = typeof distance_mi === 'number' && Number.isFinite(distance_mi)
     ? Math.round(distance_mi)
     : undefined;
-  // Generate a short, muted snippet purely from category/tags.
-  // We do not fetch or depend on schema changes here.
-  const snippet = describePlace(category, null);
+  // Generate a short, muted snippet. If we had a freeform description
+  // on the item it would win; for the unified search row we derive it
+  // purely from category/subcategory without schema changes.
+  const snippet = describePlace(category || undefined, subcategory || undefined);
 
   return (
     <article className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 md:p-5">
@@ -47,7 +48,7 @@ export default function PlaceRow({ id, title, category, subcategory, subtitle, d
       <div className="mt-3">
         {/* Muted 1–2 line description under the title */}
         {snippet && (
-          <p className="text-sm text-slate-600 mb-2 line-clamp-2" title={snippet}>
+          <p className="text-sm text-muted-foreground line-clamp-2" title={snippet}>
             {snippet}
           </p>
         )}
