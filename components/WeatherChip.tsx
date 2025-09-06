@@ -2,14 +2,12 @@ import 'server-only';
 import dayjs from 'dayjs';
 import { getEventWeather, pickHourly } from '@/lib/weather';
 
-function iconFor(code: number): string {
-  // Minimal mapping
-  if ([0].includes(code)) return '☀️';
-  if ([1,2,3].includes(code)) return '⛅️';
-  if ([45,48].includes(code)) return '🌫️';
-  if ([51,53,55,61,63,65,80,81,82].includes(code)) return '🌧️';
-  if ([71,73,75,85,86].includes(code)) return '❄️';
-  if ([95,96,99].includes(code)) return '⛈️';
+function pickEmoji(tempF: number | null, precipPct: number | null): string {
+  const p = typeof precipPct === 'number' ? precipPct : null;
+  const t = typeof tempF === 'number' ? tempF : null;
+  if (p !== null && p >= 40) return '🌧️';
+  if (t !== null && t >= 75) return '☀️';
+  if (t !== null) return '☁️';
   return '🌡️';
 }
 
@@ -24,32 +22,33 @@ export default async function WeatherChip({
   lon?: number | null;
   startsAt?: string | null;
 }) {
+  // Stable placeholder when inputs are missing
+  if (!lat || !lon || !startsAt) {
+    return (
+      <span className="inline-flex items-center text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">—</span>
+    );
+  }
+
   const res = await getEventWeather(eventId, lat ?? null, lon ?? null, startsAt ?? null);
   if (!res.ok) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-        Forecast available closer to the date
-      </span>
+      <span className="inline-flex items-center text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">—</span>
     );
   }
 
   const point = pickHourly(res.payload, startsAt ?? null);
   if (!point) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-        Forecast available closer to the date
-      </span>
+      <span className="inline-flex items-center text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">—</span>
     );
   }
 
-  const dt = dayjs(point.timeISO).format('ddd hA');
-  const icon = iconFor(point.weathercode);
   const precip = Math.round(point.precipProb);
+  const emoji = pickEmoji(point.temperatureF, precip);
   return (
     <span className="inline-flex items-center gap-2 text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-800">
-      <span>{icon}</span>
-      <span>{dt} • {Math.round(point.temperatureF)}° • {precip}% rain</span>
+      <span>{emoji}</span>
+      <span>{Math.round(point.temperatureF)}° • {precip}%</span>
     </span>
   );
 }
-
