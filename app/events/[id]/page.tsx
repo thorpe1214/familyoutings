@@ -16,6 +16,47 @@ type PageProps = {
   params: { id: string };
 };
 
+// Small helper to format UTC timestamps into ICS-friendly strings.
+// Returns null when input is missing or invalid.
+function dtUTC(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  // YYYYMMDDThhmmssZ
+  return d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
+// Build a minimal, standards-friendly ICS string for the event.
+// - No secrets; server-side only.
+// - Sanitizes newlines to keep ICS valid; CRLF line endings per spec.
+function toICS(evt: any): string {
+  const start = dtUTC(evt.start_utc || evt.start);
+  const end = dtUTC(evt.end_utc || evt.end);
+  const summary = String(evt.title || '').replace(/\r?\n/g, ' ');
+  const locationParts = [evt.venue_name || evt.venue, evt.address, evt.city, evt.state].filter(Boolean);
+  const location = locationParts.join(', ').replace(/\r?\n/g, ' ');
+  const desc = String(evt.description || '').replace(/\r?\n/g, ' ');
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//FamilyOutings//EN',
+    'BEGIN:VEVENT',
+    `UID:evt-${evt.id}@familyoutings`,
+    `DTSTAMP:${dtUTC(new Date().toISOString())}`,
+    start ? `DTSTART:${start}` : '',
+    end ? `DTEND:${end}` : '',
+    summary ? `SUMMARY:${summary}` : '',
+    location ? `LOCATION:${location}` : '',
+    desc ? `DESCRIPTION:${desc}` : '',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].filter(Boolean);
+
+  // ICS requires CRLF line endings
+  return lines.join('\r\n');
+}
+
 // Helper: build the base URL on the server using request headers.
 // This avoids hard-coding site URL which can be missing in certain envs.
 function getBaseUrlFromHeaders() {
@@ -115,6 +156,20 @@ export default async function EventDetails({ params }: PageProps) {
   // If no human-written description, try AI fallback (server-side).
   const autoDescription = event.description ? null : await fetchAutoDescription(params.id);
 
+  // Inline ICS data URL (cacheable by the browser; tiny payload here)
+  const icsBlobHref = `data:text/calendar;charset=utf-8,${encodeURIComponent(
+    toICS({
+      id: event.id,
+      title: event.title,
+      start_utc: event.start,
+      end_utc: event.end,
+      venue_name: event.venue,
+      address: event.address,
+      description: event.description || autoDescription || '',
+      slug: (row?.slug as string) || undefined,
+    })
+  )}`;
+
   return (
     <div className="max-w-2xl mx-auto p-6 flex flex-col gap-5">
       <nav>
@@ -160,12 +215,14 @@ export default async function EventDetails({ params }: PageProps) {
         ) : null}
       </section>
       <div className="flex gap-3">
-        <a
-          href={`/api/ics?id=${encodeURIComponent(event.id)}`}
+        {/* Add to Calendar: inline ICS with UTC DTSTART/DTEND; safe, minimal fields */}
+        <Link
+          href={icsBlobHref}
+          download={`${String((row?.slug as string) || event.id)}.ics`}
           className="inline-flex items-center gap-2 px-3 py-2 rounded border border-gray-300 hover:bg-gray-50"
         >
           <span>📅</span> <span>Add to Calendar</span>
-        </a>
+        </Link>
         <a
           href={event.source.url}
           target="_blank"

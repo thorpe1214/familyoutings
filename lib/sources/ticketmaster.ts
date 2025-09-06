@@ -22,6 +22,21 @@ function pick<T>(v: T | undefined | null): T | null {
   return v == null ? null : v;
 }
 
+// Ticketmaster age restriction helper
+// Best-effort detection of adult-only events based on TM-provided fields only.
+// - Handles missing/partial ageRestrictions safely
+// - Considers explicit legal-age enforcement flags
+// - Matches common textual forms like "21+", "18+", "21 and over", "must be 21",
+//   including unicode dashes and flexible spacing
+function isAdultOnlyFromTm(ev: any): boolean {
+  const ar = ev?.ageRestrictions;
+  const rule = String(ar?.rule || '').toLowerCase();
+  const legal = Boolean(ar?.legalAgeEnforced); // TM sets this when venue enforces legal age
+  // Regex catches 21+, 18+, "21 and over", "over 21", "must be 21", etc.; includes unicode dashes.
+  const ADULT_RE = /(?:^|[\s()\-–—])(?:21\+|18\+|adults?\s*only|21\s*(?:and\s*)?over|over\s*21|must\s*be\s*(?:21|18))(?:$|[\s()\-–—])/i;
+  return !!(legal || ADULT_RE.test(rule));
+}
+
 export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEvent[]> {
   const { lat, lon, radiusMiles, startISO, endISO } = args;
 
@@ -113,7 +128,22 @@ export async function fetchTicketmasterFamily(args: Args): Promise<NormalizedEve
       } as NormalizedEvent;
       // Include title + description + tags + venue_name in classifier blob
       const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")} ${item.venue_name}`.toLowerCase();
-      item.kid_allowed = detectKidAllowed(blob) ?? true;
+      const heuristic = detectKidAllowed(blob); // boolean | null
+      const adultFromTm = isAdultOnlyFromTm(ev);
+      // Decision matrix (most conservative):
+      // - If TM says adult-only (explicit flag/rule), force false
+      // - Else if our heuristic says not kid-friendly, force false
+      // - Else if heuristic says kid-friendly, keep true
+      // - Else default to true only when no adult signals found
+      if (adultFromTm) {
+        item.kid_allowed = false;
+      } else if (heuristic === false) {
+        item.kid_allowed = false;
+      } else if (heuristic === true) {
+        item.kid_allowed = true;
+      } else {
+        item.kid_allowed = true; // default only when no adult signals found
+      }
       return item;
     })
     .filter((e) => !!e.start_utc);
@@ -217,7 +247,18 @@ export async function fetchTicketmaster(params: {
         tags: tags.length ? tags : ["ticketmaster"],
       } as NormalizedEvent;
       const blob = `${item.title} ${item.description} ${(item.tags || []).join(" ")} ${item.venue_name}`.toLowerCase();
-      item.kid_allowed = detectKidAllowed(blob) ?? true;
+      const heuristic = detectKidAllowed(blob); // boolean | null
+      const adultFromTm = isAdultOnlyFromTm(ev);
+      // Decision matrix (most conservative) — see notes above in first mapper
+      if (adultFromTm) {
+        item.kid_allowed = false;
+      } else if (heuristic === false) {
+        item.kid_allowed = false;
+      } else if (heuristic === true) {
+        item.kid_allowed = true;
+      } else {
+        item.kid_allowed = true; // default only when no adult signals found
+      }
       return item;
     })
     .filter(Boolean) as NormalizedEvent[];

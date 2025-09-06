@@ -1,5 +1,8 @@
 import 'server-only';
 import dayjs from 'dayjs';
+// ✅ Enable UTC plugin for server usage of dayjs().utc()
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
 import { supabaseService } from '@/lib/supabaseService';
 
 // Lightweight server-side helper for event weather chips.

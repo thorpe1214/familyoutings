@@ -1,7 +1,7 @@
 // API: GET /api/geo/suggest
 // Purpose: Robust Nominatim autocomplete for US locations and ZIPs.
 // - Accepts `q` or `query` (prefer `q`)
-// - Only fetch when query length >= 2 (handles IME composition / short inputs)
+// - Accepts 1-character queries (keep debounce on client)
 // - Builds Nominatim URL exactly as requested (no bounded by default)
 // - If both lat & lon provided, add a small viewbox to bias results (without bounding)
 // - Accept types: postcode, city, town, village, hamlet, locality, municipality, county, state
@@ -44,11 +44,11 @@ export async function GET(req: Request) {
     const lat = Number(url.searchParams.get('lat'));
     const lon = Number(url.searchParams.get('lon'));
 
-    // Edge cases: IME / empty / too short — return fast without remote fetch
-    if (!qRaw || qRaw.length < 2) {
-      const res = NextResponse.json({ ok: true, suggestions: [] });
-      res.headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
-      return res;
+    // Edge cases: IME / empty — return fast without remote fetch
+    if (qRaw.length < 1) {
+      const r = NextResponse.json({ suggestions: [] });
+      r.headers.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
+      return r;
     }
 
     // Build URL exactly as requested
@@ -74,38 +74,39 @@ export async function GET(req: Request) {
       // IMPORTANT: do NOT set bounded=1; we only bias ranking.
     }
 
+    // Polite User-Agent; allow env override.
     const reqHeaders = {
-      'User-Agent': 'familyoutings/1.0 (contact: you@example.com)',
+      'User-Agent': process.env.SUGGEST_UA || 'familyoutings/1.0 (contact: admin@familyoutings.example)',
     } as Record<string, string>;
 
-    const resp = await fetch(base.toString(), {
-      method: 'GET',
-      headers: reqHeaders,
-      // We prefer CDN caching; avoid node fetch caching here
-      cache: 'no-store',
-    });
-
-    const status = resp.status;
-    const text = await resp.text();
-    if (!resp.ok) {
-      const body = { ok: false, error: 'upstream_error', status } as any;
-      if (debug) body.url = base.toString();
-      const r = NextResponse.json(body, { status });
-      r.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
-      return r;
+    let upstreamOk = false;
+    let status = 0;
+    let text = '';
+    try {
+      const resp = await fetch(base.toString(), {
+        method: 'GET',
+        headers: reqHeaders,
+        // We prefer CDN caching; avoid node fetch caching here
+        cache: 'no-store',
+      });
+      status = resp.status;
+      text = await resp.text();
+      upstreamOk = resp.ok;
+    } catch (e) {
+      // Network failure; fall back to local data below
+      upstreamOk = false;
     }
+    // If upstream was not OK, we'll proceed to fallback path later; keep json = []
 
     // Parse JSON safely; keep payload small
     let json: any[] = [];
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) json = parsed;
-    } catch {
-      const body: any = { ok: false, error: 'invalid_json', status };
-      if (debug) body.url = base.toString();
-      const r = NextResponse.json(body, { status: 502 });
-      r.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
-      return r;
+    if (upstreamOk) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) json = parsed;
+      } catch {
+        // leave json as [] and continue to fallback
+      }
     }
 
     // Filter and map compact items
@@ -140,7 +141,41 @@ export async function GET(req: Request) {
 
     // Re-rank and cap to 8
     mapped.sort((a, b) => a._rank - b._rank);
-    const items = mapped.slice(0, 8).map(({ _rank, ...rest }) => rest);
+    let items = mapped.slice(0, 8).map(({ _rank, ...rest }) => rest);
+
+    // ---------- Local fallback if upstream is empty or failed ----------
+    if (items.length === 0) {
+      try {
+        // Lazy import to avoid bundling unless needed
+        const local = (await import('@/app/data/us_metro_zips.json')).default as Array<{ zip: string; label: string }>;
+        const q = qRaw.toLowerCase();
+
+        // Simple prefix match on ZIP or city/state label (e.g., "Chicago IL")
+        const hits = local
+          .filter((r) => String(r.zip).startsWith(q) || String(r.label).toLowerCase().startsWith(q))
+          .slice(0, 8)
+          .map((r) => {
+            // Convert "Chicago IL" -> "Chicago, IL"
+            const parts = r.label.split(' ');
+            const city = parts.slice(0, -1).join(' ');
+            const state = parts.slice(-1)[0] || '';
+            return {
+              id: `zip/${r.zip}`,
+              label: `${city}, ${state}`,
+              city,
+              state,
+              postcode: r.zip,
+              lat: undefined as any,
+              lon: undefined as any,
+              kind: 'postcode',
+            };
+          });
+
+        items = hits;
+      } catch {
+        // If local import fails, keep items = []
+      }
+    }
 
     const body: any = { suggestions: items };
     if (debug) {
@@ -153,7 +188,7 @@ export async function GET(req: Request) {
     return r;
   } catch (e: any) {
     // Stable JSON — avoid HTML errors
-    const r = NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+    const r = NextResponse.json({ suggestions: [] });
     r.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=600');
     return r;
   }

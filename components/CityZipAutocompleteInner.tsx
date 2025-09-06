@@ -81,7 +81,7 @@ export default function CityZipAutocompleteInner() {
     let t: any;
     const q = value.trim();
     setError(null);
-    if (!q || q.length < 2) {
+    if (!q || q.length < 1) {
       setItems([]);
       setLoading(false);
       return () => { abort.abort(); };
@@ -204,8 +204,14 @@ export default function CityZipAutocompleteInner() {
     }, 150);
   }, [selectSuggestion, value]);
 
-  const showNoMatches = !loading && !error && value.trim().length >= 2 && items.length === 0 && open;
+  const showNoMatches = !loading && !error && value.trim().length >= 1 && items.length === 0 && open;
   const showErrorRow = !loading && !!error && open;
+
+  // Stable, contextual empty-state copy for the dropdown
+  const emptyText =
+    value.trim().length < 1 ? 'Type at least 1 letter' :
+    loading ? 'Searching…' :
+    'No matches (try full city name or ZIP)';
 
   return (
     <div className="relative inline-block">
@@ -273,10 +279,10 @@ export default function CityZipAutocompleteInner() {
           ))}
 
           {showNoMatches && (
-            <li className="px-2 py-1 text-gray-500 select-none">No matches</li>
+            <li className="px-2 py-1 text-gray-500 select-none">{emptyText}</li>
           )}
           {showErrorRow && (
-            <li className="px-2 py-1 text-gray-500 select-none">Suggestions unavailable</li>
+            <li className="px-2 py-1 text-gray-500 select-none">{emptyText}</li>
           )}
         </ul>
       )}

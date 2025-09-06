@@ -33,6 +33,12 @@ function looksLikeHolidayTitle(title?: string) {
   return HOLIDAY_TITLES.has(title.toLowerCase().trim());
 }
 
+// ----- Adult-only title guard -----
+// A single, reusable regex to catch common adult-only patterns.
+// Handles unicode dashes and spacing variants (e.g., "– 21+", "21 +", "over 21").
+// Anchored loosely to separators to minimize false positives.
+const ADULT_TITLE = /(?:^|[\s()\-–—])(?:21\+|18\+|adults?\s*only|21\s*(?:and\s*)?over|over\s*21)(?:$|[\s()\-–—])/i;
+
 // Heuristic: treat as all-day if it starts at 00:00 and ends at 00:00 the next day (± a minute),
 // or if the duration is ~24h and starts at midnight. Works with UTC timestamps.
 function isAllDayWindow(startUtc?: string, endUtc?: string) {
@@ -143,14 +149,36 @@ export async function GET(req: Request) {
 
     // Age/Indoor filters intentionally ignored (labels remain read-only on UI)
 
+    // --- SQL-side coarse filter for obvious adult-only titles ---
+    // PLUS symbol is literal in ILIKE; include dash/space variants and common phrasing.
+    // This reduces rows over the wire; JS regex below remains the final guard.
+    query = query
+      .not('title', 'ilike', '%21+%')
+      .not('title', 'ilike', '% 21+%')
+      .not('title', 'ilike', '%– 21+%')
+      .not('title', 'ilike', '%— 21+%')
+      .not('title', 'ilike', '%21 +%')
+      .not('title', 'ilike', '%18+%')
+      .not('title', 'ilike', '% 18+%')
+      .not('title', 'ilike', '%adult%only%')
+      .not('title', 'ilike', '%over 21%')
+      .not('title', 'ilike', '%21 and over%');
+
     // Window
     query = query.range(0, limit - 1);
 
     const { data: rows, error } = await query;
     if (error) throw error;
 
-    // ---- Remove ICS "holiday placeholders" (what you saw in the screenshot) ----
-    const items = (rows ?? []).filter((ev) => !isHolidayPlaceholder(ev));
+    // ---- Policy gates: adult-only titles and ICS holiday placeholders ----
+    // Filter AFTER DB fetch and BEFORE cursor calc.
+    const items = (rows ?? []).filter((ev) => {
+      // 1) Drop adult-only events by title (policy gate)
+      const title = String(ev?.title || "");
+      if (ADULT_TITLE.test(title)) return false;
+      // 2) Drop ICS "holiday placeholder" events (existing logic)
+      return !isHolidayPlaceholder(ev);
+    });
 
     // next cursor (based on filtered list)
     let nextCursor: { cursorStart: string; cursorId: string } | null = null;
